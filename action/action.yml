@@ -1,0 +1,126 @@
+# Composite GitHub Action: install the `tm` CLI in a workflow runner
+# and (optionally) wire its auth via the standard TM_API_KEY env var.
+#
+# Most common shape — gate the build on a regression verdict:
+#
+#   - uses: trafficmorph/tm-cli/cli/action@v0.1.0
+#     with:
+#       api-key: ${{ secrets.TRAFFICMORPH_API_KEY }}
+#       base-url: https://app.trafficmorph.example.com
+#   - run: tm runs start 42 --wait --fail-on-verdict FAIL,WARN
+#
+# Pinning: always reference an exact `@vX.Y.Z` tag in production
+# workflows. `@v1` (the moving-major convention) is NOT maintained
+# — pin a specific version and dependabot/renovate will surface
+# updates.
+#
+# Why composite + curl rather than a JS or Docker action:
+# composite actions reuse the runner's shell and PATH, so the `tm`
+# binary is available to every subsequent `run:` step. Docker
+# actions impose Linux-only constraint, JS actions add a build /
+# distribution step. Composite is the right shape for a CLI
+# wrapper.
+
+name: "Install TrafficMorph CLI"
+description: "Install the `tm` CLI on the runner and configure it with API key + base URL."
+
+branding:
+  icon: "activity"
+  color: "purple"
+
+inputs:
+  version:
+    description: "Version tag to install (e.g. v0.1.0). Defaults to the latest release."
+    required: false
+    default: "latest"
+  api-key:
+    description: "TrafficMorph API key (pass via secret: ${{ secrets.TRAFFICMORPH_API_KEY }}). Exported as $TM_API_KEY for downstream steps."
+    required: false
+    default: ""
+  base-url:
+    description: "TrafficMorph base URL. Exported as $TM_BASE_URL for downstream steps."
+    required: false
+    default: ""
+  install-dir:
+    description: "Directory to install the binary into. Default ~/.local/bin."
+    required: false
+    default: ""
+  github-repo:
+    description: "Override the GitHub repo to download from (advanced — useful for testing forks)."
+    required: false
+    default: "trafficmorph/tm-cli"
+
+outputs:
+  version:
+    description: "The resolved version that was installed."
+    value: ${{ steps.install.outputs.version }}
+
+runs:
+  using: "composite"
+  steps:
+    - name: Install tm
+      id: install
+      shell: bash
+      run: |
+        set -euo pipefail
+        # Thread version + repo + install-dir inputs through the
+        # install script's env-var protocol. Use `export` (not
+        # prefix-style `VAR=val command`) so subsequent commands
+        # in this step inherit them.
+        export TM_VERSION="${{ inputs.version }}"
+        export TM_GITHUB_REPO="${{ inputs.github-repo }}"
+        export TM_INSTALL_DIR="${{ inputs.install-dir }}"
+        # The install script tolerates empty TM_INSTALL_DIR (treats
+        # it like unset — falls through to $HOME/.local/bin), so
+        # we can export unconditionally.
+
+        # CRITICAL: execute install.sh from the action's own
+        # checkout, NOT via `curl raw.githubusercontent.com/.../main/...`.
+        # GitHub Actions checks out the action repo at the exact ref
+        # the caller pinned (`uses: …@v0.2.0` → v0.2.0 checkout), so
+        # $GITHUB_ACTION_PATH points at /cli/action/ at that ref, and
+        # ../install.sh is the install script at the SAME immutable
+        # ref. A network fetch against `/main/cli/install.sh` would
+        # silently load post-pin installer code and could change the
+        # action's behavior after release — defeating the user's
+        # immutability expectations.
+        #
+        # The binary download (inside install.sh) IS still network,
+        # but it pulls from a versioned GitHub Releases asset URL
+        # whose path is bound to TM_VERSION — same immutability
+        # property when the caller pins `version:`.
+        sh "$GITHUB_ACTION_PATH/../install.sh"
+
+        # Resolve the actual installed binary path so subsequent
+        # GITHUB_PATH lines point at a real directory. Mirrors the
+        # install script's default-resolution logic to stay in sync.
+        resolved_dir="${{ inputs.install-dir }}"
+        if [ -z "$resolved_dir" ]; then
+          if [ -w "$HOME/.local/bin" ]; then
+            resolved_dir="$HOME/.local/bin"
+          else
+            resolved_dir="/usr/local/bin"
+          fi
+        fi
+        echo "$resolved_dir" >> "$GITHUB_PATH"
+
+        # Surface the installed version as an output for callers
+        # that want to assert which version landed.
+        actual_version="$("$resolved_dir/tm" version | awk '{print $2}')"
+        echo "version=$actual_version" >> "$GITHUB_OUTPUT"
+        echo "Installed tm $actual_version to $resolved_dir"
+
+    - name: Export auth env to downstream steps
+      shell: bash
+      run: |
+        # Pass api-key / base-url through GITHUB_ENV so they land
+        # as env vars on every subsequent `run:` step in the same
+        # job. Skipping empty values keeps default-config behavior
+        # working when callers prefer to set env vars themselves.
+        if [ -n "${{ inputs.api-key }}" ]; then
+          echo "TM_API_KEY=${{ inputs.api-key }}" >> "$GITHUB_ENV"
+          echo "::add-mask::${{ inputs.api-key }}"
+        fi
+        if [ -n "${{ inputs.base-url }}" ]; then
+          echo "TM_BASE_URL=${{ inputs.base-url }}" >> "$GITHUB_ENV"
+        fi

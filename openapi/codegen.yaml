@@ -1,0 +1,40 @@
+# oapi-codegen configuration for generating the typed v1 API client.
+#
+# The input spec is the JSON snapshot at openapi/v1.json. JSON is
+# preferred over the sibling YAML snapshot because the go-yaml
+# library underlying oapi-codegen is overly strict about line-folding
+# around backslashes inside long string descriptions and chokes on
+# springdoc-emitted YAML. Both snapshots are regenerated from the
+# running server via the Maven invocation documented in
+# OpenApiSpecSnapshotTest. Regeneration command sequence:
+#
+#   make -C cli regen-spec    (refreshes openapi/v1.json + v1.yaml
+#                              from the live server — boots Spring)
+#   make -C cli regen-client  (runs oapi-codegen against openapi/v1.json
+#                              to produce internal/api/client.gen.go)
+#
+# Output is a single Go file with both types and the HTTP client.
+# Combining them into one package keeps imports cheap for the
+# downstream cobra command code; downstream consumers only need
+# `import "github.com/trafficmorph/tm-cli/internal/api"`.
+package: api
+generate:
+  models: true
+  client: true
+# Output path is resolved relative to the CWD where oapi-codegen
+# is invoked, NOT relative to this config file. The Makefile's
+# `regen-client` target runs from cli/, so this path is the correct
+# in-repo location.
+output: internal/api/client.gen.go
+
+# Compatibility: oapi-codegen has its own JSON tag style preference
+# that diverges from springdoc's emitted casing on a few field names.
+# `default` keeps the Go field tags aligned with what the server
+# actually emits.
+output-options:
+  skip-prune: false
+
+# Suppress unused-import nags on the generated file (the client code
+# imports `time` etc. conditionally per operation set).
+compatibility:
+  apply-chi-middleware-first-to-last: false
