@@ -28,6 +28,11 @@ security:
 - ApiKeyAuth: []
 - BearerAuth: []
 tags:
+- name: Variables sets
+  description: "CSV-style attached variables â sampled per-request to make profiles\
+    \ replay traffic with realistic per-request data (authenticated tokens, parameterized\
+    \ URLs, etc.). Pairs with the capture-import flow that auto-creates these from\
+    \ production traffic samples."
 - name: Domains
   description: Domain ownership verification. Profiles can only target hosts the user
     has proven they own â via DNS TXT record or HTTP-token challenge.
@@ -84,10 +89,12 @@ paths:
       tags:
       - Profiles
       summary: Update an existing profile
-      description: "Ownership-checks the profile by id, then applies the upsert-by-name\
-        \ service path with the request body's `name`. The schedule block, if present,\
-        \ replaces any existing schedule for the profile; omitting it leaves the current\
-        \ schedule untouched."
+      description: |-
+        Ownership-checks the profile by path id, then updates that specific row in place. The body's `name` is the new value to store, not a lookup key â even if it matches a different profile's name, only the path-id row is mutated. (The save service has both an id-based and a name-based code path; the controller pins the path id on the save request so the id-based branch runs.)
+
+        Name uniqueness is NOT enforced server-side: PUT will happily produce a duplicate-named pair under the same user. Subsequent name-keyed operations (POST `/profiles` upsert) would then resolve to the most-recently-created duplicate, which is rarely what the caller wanted. Clients that care about uniqueness (e.g. the MCP server's `tm_update_profile`) should pre-flight a `GET /profiles` and reject renames that would collide.
+
+        The schedule block, if present, replaces any existing schedule for the profile; omitting it leaves the current schedule untouched.
       operationId: updateProfile
       parameters:
       - name: id
@@ -141,6 +148,59 @@ paths:
             :\"Profile not found\"}`."
         "204":
           description: Profile deleted.
+  /api/v1/variables-sets:
+    get:
+      tags:
+      - Variables sets
+      summary: List the user's variables sets
+      description: "Returns metadata for every variables set owned by the API key's\
+        \ user. The raw CSV content is intentionally omitted from list responses â\
+        \ use `GET /{id}` for a single set's metadata, or download the CSV via the\
+        \ in-app UI endpoint if you need row-level inspection."
+      operationId: listVariablesSets
+      responses:
+        "200":
+          description: List of variables sets; may be empty.
+          content:
+            '*/*':
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/VariablesSetResponse"
+    post:
+      tags:
+      - Variables sets
+      summary: Create a variables set from inline CSV content
+      description: |-
+        CSV is uploaded as a string in the JSON body (NOT as a multipart file). Size-capped at the parser's `MAX_BYTES` â for larger sets, downsample client-side before uploading.
+
+        The CSV's first row is the column header. Columns whose names match `$$macro$$` placeholders in the profile's URL / body / headers get substituted per-request at run time. An optional special column `weight` (case-insensitive) makes rows pickable with a probability proportional to its value â useful for replaying real traffic distributions.
+
+        Sampling modes (mirrors `VariablesSet.SamplingMode`):
+          - `ROW`: one row sampled per request; ALL columns substituted from that row. Preserves cross-column correlations. REQUIRES a `weight` column.
+          - `COLUMN`: each column sampled INDEPENDENTLY per request, producing uncorrelated combinations across columns. A shared `weight` column acts as the default weight; per-column `{col}_weight` columns override for individual ones. Weights are optional.
+          - `SEQUENTIAL`: rows walked in CSV order; one row per request, wrapping after the last. Weights ignored. Combined with a derived RPS curve, reproduces both the input distribution AND the timing of the original capture.
+      operationId: create
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateVariablesSetRequest"
+        required: true
+      responses:
+        "201":
+          description: Variables set created.
+          content:
+            '*/*':
+              schema:
+                $ref: "#/components/schemas/VariablesSetResponse"
+        "400":
+          description: "Validation failure: blank name, missing CSV, malformed CSV,\
+            \ exceeded size cap, exceeded per-user quota, etc."
+          content:
+            '*/*':
+              schema:
+                $ref: "#/components/schemas/VariablesSetResponse"
   /api/v1/profiles:
     get:
       tags:
@@ -332,7 +392,7 @@ paths:
       description: "Returns all domains the user has added, with each domain's current\
         \ verification state (`PENDING` / `VERIFIED`) and the challenge tokens still\
         \ in play."
-      operationId: list
+      operationId: listDomains
       responses:
         "200":
           description: List of domains; may be empty.
@@ -548,6 +608,144 @@ paths:
             '*/*':
               schema:
                 $ref: "#/components/schemas/CaptureAnalysisResponse"
+  /api/v1/variables-sets/{id}:
+    get:
+      tags:
+      - Variables sets
+      summary: Get a single variables set's metadata
+      description: "Returns id, name, sampling mode, macro columns, optional weight\
+        \ column, row count, size, and timestamps. Raw CSV content NOT included â\
+        \ that's a separate concern served only by the in-app UI endpoint."
+      operationId: get
+      parameters:
+      - name: id
+        in: path
+        description: Variables set id.
+        required: true
+        schema:
+          type: integer
+          format: int64
+        example: 7
+      responses:
+        "400":
+          description: "Variables set not found or not owned by this user. The service\
+            \ throws `IllegalArgumentException(\"Variables set not found\")` for both\
+            \ cases. Body: `{\"error\":\"Variables set not found\"}`."
+          content:
+            '*/*':
+              schema:
+                $ref: "#/components/schemas/VariablesSetResponse"
+        "200":
+          description: Variables set found.
+          content:
+            '*/*':
+              schema:
+                $ref: "#/components/schemas/VariablesSetResponse"
+    delete:
+      tags:
+      - Variables sets
+      summary: Delete a variables set
+      description: "Removes the set. **Fails fast (HTTP 400) if any profile still\
+        \ has this set attached** â the response body's error message names the referencing\
+        \ profile(s) so the caller can detach them first. There is NO auto-detach:\
+        \ the deliberate design is to make accidental attachment loss visible. To\
+        \ delete an attached set, either (a) detach via `tm_update_profile` / the\
+        \ UI on each referencing profile and then retry the delete, or (b) delete\
+        \ the referencing profiles themselves if they're no longer needed."
+      operationId: delete
+      parameters:
+      - name: id
+        in: path
+        description: Variables set id.
+        required: true
+        schema:
+          type: integer
+          format: int64
+        example: 7
+      responses:
+        "400":
+          description: "Set not found, not owned by this user, OR still attached to\
+            \ one or more profiles. The error body for the still-attached case has\
+            \ shape `{\"error\":\"Can't delete 'name' â still attached to profile(s):\
+            \ A, B, .... Detach it from those profiles first.\"}`."
+        "204":
+          description: Variables set deleted.
+    patch:
+      tags:
+      - Variables sets
+      summary: Rename a variables set
+      description: "Changes only the display name. The CSV content, mode, and attached-profile\
+        \ relationships are untouched."
+      operationId: rename
+      parameters:
+      - name: id
+        in: path
+        description: Variables set id.
+        required: true
+        schema:
+          type: integer
+          format: int64
+        example: 7
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/RenameVariablesSetRequest"
+        required: true
+      responses:
+        "200":
+          description: Variables set renamed.
+          content:
+            '*/*':
+              schema:
+                $ref: "#/components/schemas/VariablesSetResponse"
+        "400":
+          description: Set not found or new name invalid (blank / too long).
+          content:
+            '*/*':
+              schema:
+                $ref: "#/components/schemas/VariablesSetResponse"
+  /api/v1/variables-sets/{id}/mode:
+    patch:
+      tags:
+      - Variables sets
+      summary: Change the sampling mode of an existing variables set
+      description: "Switches between any of the three modes (`ROW`, `COLUMN`, `SEQUENTIAL`)\
+        \ without re-uploading the CSV. Most common use: a capture-import-created\
+        \ set lands in `ROW` mode by default; flip it to `SEQUENTIAL` for ordered\
+        \ replay that reproduces the original traffic order, or to `COLUMN` for uncorrelated\
+        \ per-column sampling. The server re-parses the stored CSV with the target\
+        \ mode and 400s if incompatible (e.g. switching to `ROW` on a CSV with no\
+        \ `weight` column). See the POST endpoint description for the full mode semantics."
+      operationId: changeMode
+      parameters:
+      - name: id
+        in: path
+        description: Variables set id.
+        required: true
+        schema:
+          type: integer
+          format: int64
+        example: 7
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ChangeVariablesSetModeRequest"
+        required: true
+      responses:
+        "200":
+          description: Mode changed.
+          content:
+            '*/*':
+              schema:
+                $ref: "#/components/schemas/VariablesSetResponse"
+        "400":
+          description: Set not found or mode invalid.
+          content:
+            '*/*':
+              schema:
+                $ref: "#/components/schemas/VariablesSetResponse"
   /api/v1/history:
     get:
       tags:
@@ -922,6 +1120,57 @@ components:
         "y":
           type: number
           format: double
+    CreateVariablesSetRequest:
+      required:
+      - csvContent
+      - mode
+      - name
+      type: object
+      properties:
+        name:
+          maxLength: 120
+          minLength: 0
+          type: string
+        mode:
+          type: string
+          enum:
+          - ROW
+          - COLUMN
+          - SEQUENTIAL
+        csvContent:
+          type: string
+    VariablesSetResponse:
+      type: object
+      properties:
+        id:
+          type: integer
+          format: int64
+        name:
+          type: string
+        mode:
+          type: string
+          enum:
+          - ROW
+          - COLUMN
+          - SEQUENTIAL
+        macroColumns:
+          type: array
+          items:
+            type: string
+        weightColumn:
+          type: string
+        rowCount:
+          type: integer
+          format: int32
+        byteSize:
+          type: integer
+          format: int32
+        createdAt:
+          type: string
+          format: date-time
+        updatedAt:
+          type: string
+          format: date-time
     TrafficRunControlResponse:
       type: object
       properties:
@@ -1085,6 +1334,26 @@ components:
           type: array
           items:
             type: string
+    RenameVariablesSetRequest:
+      required:
+      - name
+      type: object
+      properties:
+        name:
+          maxLength: 120
+          minLength: 0
+          type: string
+    ChangeVariablesSetModeRequest:
+      required:
+      - mode
+      type: object
+      properties:
+        mode:
+          type: string
+          enum:
+          - ROW
+          - COLUMN
+          - SEQUENTIAL
     TrafficProfileSummaryResponse:
       type: object
       properties:
