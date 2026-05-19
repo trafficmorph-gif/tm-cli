@@ -1,17 +1,9 @@
-# tm CLI build / regen / test targets.
+# tm CLI build / test targets.
 #
 # Quickstart:
 #   make build        compile the binary into bin/tm
 #   make test         run all Go tests
-#   make regen-spec   re-fetch the OpenAPI snapshot from the running server
-#   make regen-client re-generate Go client types from the snapshot
 #   make all          build + test (default CI target)
-#
-# Build / regen targets are split because regenerating the spec
-# requires booting the Spring Boot app (~5s), whereas regenerating
-# the client from an existing snapshot is sub-second. Keep them
-# decoupled so fast inner-loop iteration (tweak codegen.yaml, regen,
-# build) doesn't pay the Spring boot cost.
 
 VERSION ?= dev
 SPEC_VERSION = v1
@@ -26,9 +18,9 @@ OAPI_CODEGEN_VERSION = v2.7.0
 BIN_DIR := bin
 TM_BINARY := $(BIN_DIR)/tm
 
-LDFLAGS := -X 'github.com/trafficmorph/tm-cli/internal/cli.CLIVersion=$(VERSION)'
+LDFLAGS := -X 'github.com/trafficmorph-gif/tm-cli/internal/cli.CLIVersion=$(VERSION)'
 
-.PHONY: all build test lint clean regen-spec regen-client
+.PHONY: all build test lint clean regen-client
 
 all: build test
 
@@ -57,21 +49,11 @@ lint:
 clean:
 	rm -rf $(BIN_DIR) internal/api/client.gen.go
 
-# regen-spec re-fetches the OpenAPI snapshot from the Spring Boot
-# server. Runs the OpenApiSpecSnapshotTest in the parent Maven
-# project with -Dtm.snapshot=true so the test actually writes the
-# snapshot files (it's a no-op otherwise).
-regen-spec:
-	cd .. && mvn -B -q -Dskip.frontend=true -Dtm.snapshot=true \
-		-Dtest=OpenApiSpecSnapshotTest test
-
-# regen-client re-generates Go types from the committed JSON snapshot.
-# Uses `go run` so the tool version is pinned in this Makefile and
-# resolved through Go's module cache — no per-platform binaries in
-# bin/, no install step that needs to detect a wrong-platform binary
-# already on disk. Source of truth is openapi/v1.json (NOT YAML —
-# see OpenApiSpecSnapshotTest Javadoc for why oapi-codegen prefers
-# JSON for this codebase).
+# Regenerate the typed Go HTTP client from the committed OpenAPI
+# snapshot at openapi/v1.json. Uses `go run` so the tool version
+# is pinned in this Makefile and resolved through Go's module
+# cache — no per-platform binaries in bin/, no install step that
+# needs to detect a wrong-platform binary already on disk.
 regen-client:
 	go run github.com/oapi-codegen/oapi-codegen/v2/cmd/oapi-codegen@$(OAPI_CODEGEN_VERSION) \
 		-config openapi/codegen.yaml openapi/v1.json

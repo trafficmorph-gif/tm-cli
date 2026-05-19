@@ -1,0 +1,98 @@
+# Cuts a release of the `tm` CLI via goreleaser.
+#
+# This workflow lives at `cli/.github/workflows/release.yml` in
+# the monorepo. It is NOT a GitHub Actions workflow there —
+# GitHub only picks up workflows at the repo root's
+# `.github/workflows/` path. The file travels through
+# `git filter-repo --subdirectory-filter cli` to the standalone
+# mirror at github.com/trafficmorph-gif/tm-cli, where it lands at
+# the mirror root's `.github/workflows/release.yml` and IS active.
+#
+# Trigger: push of a `v*.*.*` tag (e.g. `v0.2.0`) to the MIRROR.
+# The release script (`scripts/release-tm-cli.sh`) handles the
+# filter-repo sync + tag-push.
+#
+# Builds cross-platform binaries, archives them, computes
+# checksums, and uploads everything to a GitHub Release on the
+# mirror. Users land on the mirror's Releases page for downloads.
+#
+# To dry-run locally without tagging (from a monorepo checkout):
+#   cd cli && goreleaser release --snapshot --clean
+name: Release tm CLI
+
+on:
+  push:
+    tags:
+      # GitHub tag filters use glob (fnmatch), NOT regex — `+` and
+      # `\d` are literal characters, not quantifiers. So
+      # `v[0-9]+.[0-9]+.[0-9]+` would match the literal string
+      # `v0+.0+.0+` and reject `v0.1.0`. The pattern below uses
+      # `v[0-9]*` which matches any tag starting with `v` followed
+      # by a digit: catches every real semver shape (`v0.1.0`,
+      # `v1.0.0`, `v0.2.0-rc1`, `v10.5.3+meta`) while still rejecting
+      # internal tags like `vlatest`, `vfoo`, or `nightly`.
+      - "v[0-9]*"
+
+# Single in-flight release at a time. If a second tag is pushed
+# while a release is mid-flight, queue it rather than racing.
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+permissions:
+  # `contents: write` lets goreleaser create/update the release
+  # and upload artifacts.
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out the repo at the tagged commit
+        uses: actions/checkout@v4
+        with:
+          # goreleaser needs the full history + tags to compute the
+          # changelog (diff against the previous tag). Default depth
+          # of 1 would emit an empty changelog.
+          fetch-depth: 0
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          # Pinned to the toolchain version goreleaser was tested
+          # against locally. Bump both this AND GORELEASER_VERSION
+          # together — goreleaser releases occasionally raise the
+          # minimum required Go and we want CI to fail loudly at
+          # setup-go rather than mysteriously auto-switching
+          # toolchains mid-build.
+          go-version: "1.25"
+          cache: true
+          cache-dependency-path: go.sum
+
+      - name: Run goreleaser
+        run: |
+          # goreleaser pinned to an exact version. Avoids
+          # @latest auto-jumping toolchains (a new goreleaser
+          # minor occasionally raises its minimum Go and would
+          # silently force the runner to download a different Go
+          # via Go's toolchain switcher, breaking reproducibility).
+          # Bump $GORELEASER_VERSION + go-version together in the
+          # same PR when upgrading.
+          go install github.com/goreleaser/goreleaser/v2@${GORELEASER_VERSION}
+          goreleaser release --clean
+        env:
+          # goreleaser uses GITHUB_TOKEN to create the release and
+          # upload assets. The default token has contents:write per
+          # the job's `permissions:` block above.
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          # Single source of truth for the goreleaser version used
+          # by this workflow. The pinned tag was validated against
+          # the go-version above; bump them together.
+          GORELEASER_VERSION: v2.7.0
+          # Pin the toolchain — Go's auto-toolchain mechanism would
+          # silently download whatever Go version goreleaser's
+          # go.mod requested, defeating the whole pinning exercise.
+          # Forcing `local` makes any mismatch fail with a clear
+          # error at `go install` time, prompting a deliberate
+          # go-version + goreleaser bump together.
+          GOTOOLCHAIN: local

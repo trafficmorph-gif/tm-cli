@@ -1,4 +1,4 @@
-module github.com/trafficmorph/tm-cli
+module github.com/trafficmorph-gif/tm-cli
 
 go 1.25.1
 

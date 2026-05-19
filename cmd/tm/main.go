@@ -15,7 +15,7 @@ import (
 	"fmt"
 	"os"
 
-	"github.com/trafficmorph/tm-cli/internal/cli"
+	"github.com/trafficmorph-gif/tm-cli/internal/cli"
 )
 
 func main() {

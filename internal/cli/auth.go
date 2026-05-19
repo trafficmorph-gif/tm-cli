@@ -4,7 +4,7 @@ import (
 	"context"
 	"net/http"
 
-	"github.com/trafficmorph/tm-cli/internal/api"
+	"github.com/trafficmorph-gif/tm-cli/internal/api"
 )
 
 // apiKeyRequestEditor returns a RequestEditor that injects the

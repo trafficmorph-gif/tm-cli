@@ -3,11 +3,11 @@
 #
 # Usage:
 #
-#   curl -sSL https://raw.githubusercontent.com/trafficmorph/tm-cli/main/cli/install.sh | sh
+#   curl -sSL https://raw.githubusercontent.com/trafficmorph-gif/tm-cli/main/cli/install.sh | sh
 #
 # Pin a specific version (recommended for CI):
 #
-#   curl -sSL https://raw.githubusercontent.com/trafficmorph/tm-cli/main/cli/install.sh | TM_VERSION=v0.1.0 sh
+#   curl -sSL https://raw.githubusercontent.com/trafficmorph-gif/tm-cli/main/cli/install.sh | TM_VERSION=v0.1.0 sh
 #
 # Override the install location (default $HOME/.local/bin, falls
 # back to /usr/local/bin if $HOME/.local/bin isn't writable):
@@ -28,7 +28,7 @@ set -eu
 # Configuration knobs that callers can override via env.
 TM_VERSION="${TM_VERSION:-latest}"
 TM_INSTALL_DIR="${TM_INSTALL_DIR:-}"
-TM_GITHUB_REPO="${TM_GITHUB_REPO:-trafficmorph/tm-cli}"
+TM_GITHUB_REPO="${TM_GITHUB_REPO:-trafficmorph-gif/tm-cli}"
 
 # ── Logging helpers ─────────────────────────────────────────────────
 # Use stderr for status output so a caller redirecting stdout still

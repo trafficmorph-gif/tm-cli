@@ -3,10 +3,10 @@
 #
 # Most common shape — gate the build on a regression verdict:
 #
-#   - uses: trafficmorph/tm-cli/cli/action@v0.1.0
+#   - uses: trafficmorph-gif/tm-cli/cli/action@v0.2.0
 #     with:
 #       api-key: ${{ secrets.TRAFFICMORPH_API_KEY }}
-#       base-url: https://app.trafficmorph.example.com
+#       base-url: https://app.your-trafficmorph-host.com
 #   - run: tm runs start 42 --wait --fail-on-verdict FAIL,WARN
 #
 # Pinning: always reference an exact `@vX.Y.Z` tag in production
@@ -48,7 +48,7 @@ inputs:
   github-repo:
     description: "Override the GitHub repo to download from (advanced — useful for testing forks)."
     required: false
-    default: "trafficmorph/tm-cli"
+    default: "trafficmorph-gif/tm-cli"
 
 outputs:
   version:

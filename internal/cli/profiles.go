@@ -6,7 +6,7 @@ import (
 
 	"github.com/spf13/cobra"
 
-	"github.com/trafficmorph/tm-cli/internal/api"
+	"github.com/trafficmorph-gif/tm-cli/internal/api"
 )
 
 func newProfilesCmd() *cobra.Command {

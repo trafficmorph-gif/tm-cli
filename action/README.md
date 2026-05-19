@@ -15,10 +15,10 @@ jobs:
   load-test:
     runs-on: ubuntu-latest
     steps:
-      - uses: trafficmorph/tm-cli/cli/action@v0.1.0
+      - uses: trafficmorph-gif/tm-cli/cli/action@v0.2.0
         with:
           api-key: ${{ secrets.TRAFFICMORPH_API_KEY }}
-          base-url: https://app.trafficmorph.example.com
+          base-url: https://app.your-trafficmorph-host.com
       - name: Start traffic profile + wait + fail on regression
         run: tm runs start 42 --wait --fail-on-verdict FAIL,WARN
 ```
@@ -31,11 +31,11 @@ NO_BASELINE). The job fails when the verdict matches.
 
 | Input | Required | Default | Notes |
 |---|---|---|---|
-| `version` | no | `latest` | Pin to an exact tag (`v0.1.0`) for reproducible workflows. `latest` resolves via the GitHub Releases API on each run, which means newer releases roll in automatically — fine for trunk-targeted jobs, risky for release branches. |
+| `version` | no | `latest` | Pin to an exact tag (`v0.2.0`) for reproducible workflows. `latest` resolves via the GitHub Releases API on each run, which means newer releases roll in automatically — fine for trunk-targeted jobs, risky for release branches. |
 | `api-key` | no | — | Pass via secret: `${{ secrets.TRAFFICMORPH_API_KEY }}`. Exported as `$TM_API_KEY` for downstream steps; also added to the action log mask so it can't accidentally leak. |
 | `base-url` | no | — | TrafficMorph base URL. Exported as `$TM_BASE_URL` for downstream steps. Omit if your job sets it via repo / org env vars instead. |
 | `install-dir` | no | `~/.local/bin` | Directory the `tm` binary lands in. Almost never needs overriding. |
-| `github-repo` | no | `trafficmorph/tm-cli` | Override the source repo for forks / staging. Advanced use only. |
+| `github-repo` | no | `trafficmorph-gif/tm-cli` | Override the source repo for forks / staging. Advanced use only. |
 
 ## Outputs
 
@@ -45,7 +45,7 @@ NO_BASELINE). The job fails when the verdict matches.
 
 ## Version pinning
 
-**Always pin to an exact tag** (`@v0.1.0`) in production workflows.
+**Always pin to an exact tag** (`@v0.2.0`) in production workflows.
 `@v1` (the moving major-version convention some actions maintain)
 is NOT published — Renovate/Dependabot will surface release updates
 as PRs, which is the safe trade-off.
@@ -56,7 +56,7 @@ as PRs, which is the safe trade-off.
 |---|---|---|
 | `ubuntu-*` | ✅ | Primary target. amd64 + arm64 binaries available. |
 | `macos-*` | ✅ | amd64 + arm64 binaries available. |
-| `windows-*` | ❌ | The install script intentionally fails on `msys*` / `mingw*` / `cygwin*` because the `.tar.gz` extract path doesn't map to Windows native tooling. Windows users should download the `.zip` asset directly from [the releases page](https://github.com/trafficmorph/tm-cli/releases) in a separate workflow step. PRs adding Windows support to the install script — `.zip` extract via `tar` (Windows 10+ ships tar) or `Expand-Archive` — are welcome. |
+| `windows-*` | ❌ | The install script intentionally fails on `msys*` / `mingw*` / `cygwin*` because the `.tar.gz` extract path doesn't map to Windows native tooling. Windows users should download the `.zip` asset directly from [the releases page](https://github.com/trafficmorph-gif/tm-cli/releases) in a separate workflow step. PRs adding Windows support to the install script — `.zip` extract via `tar` (Windows 10+ ships tar) or `Expand-Archive` — are welcome. |
 
 ## Composite action — why not Docker / JS?
 
@@ -69,7 +69,7 @@ as PRs, which is the safe trade-off.
 ## What the action installs
 
 - Binary: `tm` (Go 1.25, statically linked, ~9 MB stripped)
-- Source: https://github.com/trafficmorph/tm-cli — `cli/` directory
+- Source: https://github.com/trafficmorph-gif/tm-cli — `cli/` directory
 - License: proprietary (see the parent project's terms)
 
 ## Action ref vs binary version — they're independent
@@ -82,7 +82,7 @@ to `latest`.
 So the bare invocation:
 
 ```yaml
-- uses: trafficmorph/tm-cli/cli/action@v0.2.0
+- uses: trafficmorph-gif/tm-cli/cli/action@v0.2.0
 ```
 
 …runs the v0.2.0 action.yml but installs **the latest** release binary
@@ -90,7 +90,7 @@ So the bare invocation:
 both:
 
 ```yaml
-- uses: trafficmorph/tm-cli/cli/action@v0.2.0
+- uses: trafficmorph-gif/tm-cli/cli/action@v0.2.0
   with:
     version: v0.2.0
 ```
@@ -103,7 +103,7 @@ validation. Two valid ways to keep the two pins in sync:
 **Option 1 — repeat the literal** (simplest):
 
 ```yaml
-- uses: trafficmorph/tm-cli/cli/action@v0.2.0
+- uses: trafficmorph-gif/tm-cli/cli/action@v0.2.0
   with:
     version: v0.2.0
 ```
@@ -126,7 +126,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       # Single pin lives here, shared across every consumer workflow.
-      - uses: trafficmorph/tm-cli/cli/action@v0.2.0
+      - uses: trafficmorph-gif/tm-cli/cli/action@v0.2.0
         with:
           version: v0.2.0
           api-key: ${{ secrets.TRAFFICMORPH_API_KEY }}

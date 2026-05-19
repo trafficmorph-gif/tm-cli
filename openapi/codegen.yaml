@@ -16,7 +16,7 @@
 # Output is a single Go file with both types and the HTTP client.
 # Combining them into one package keeps imports cheap for the
 # downstream cobra command code; downstream consumers only need
-# `import "github.com/trafficmorph/tm-cli/internal/api"`.
+# `import "github.com/trafficmorph-gif/tm-cli/internal/api"`.
 package: api
 generate:
   models: true

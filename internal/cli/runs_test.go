@@ -7,7 +7,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/trafficmorph/tm-cli/internal/api"
+	"github.com/trafficmorph-gif/tm-cli/internal/api"
 )
 
 func TestParseVerdictList(t *testing.T) {

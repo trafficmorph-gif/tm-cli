@@ -20,7 +20,7 @@ import (
 
 	"github.com/spf13/cobra"
 
-	"github.com/trafficmorph/tm-cli/internal/api"
+	"github.com/trafficmorph-gif/tm-cli/internal/api"
 )
 
 // Config carries the resolved configuration for one CLI invocation —
@@ -42,7 +42,6 @@ const (
 	// EnvAPIKey carries the API key (full `tm_…` value).
 	EnvAPIKey = "TM_API_KEY"
 
-	defaultBaseURL = "https://app.trafficmorph.example.com"
 	defaultTimeout = 30 * time.Second
 
 	// annotationNeedsAuth is set on every leaf command that
@@ -90,7 +89,7 @@ func newRootCmd() *cobra.Command {
 	}
 
 	root.PersistentFlags().StringVar(&config.BaseURL, "base-url", os.Getenv(EnvBaseURL),
-		fmt.Sprintf("TrafficMorph base URL (default $%s or %s)", EnvBaseURL, defaultBaseURL))
+		fmt.Sprintf("TrafficMorph base URL (default $%s; required for API-calling commands)", EnvBaseURL))
 	root.PersistentFlags().StringVar(&config.APIKey, "api-key", os.Getenv(EnvAPIKey),
 		fmt.Sprintf("API key prefixed with tm_ (default $%s)", EnvAPIKey))
 	root.PersistentFlags().BoolVar(&config.JSON, "json", false, "Emit machine-readable JSON instead of human tables")
@@ -103,27 +102,44 @@ func newRootCmd() *cobra.Command {
 	return root
 }
 
-// finalizeConfig fills in defaults and validates the auth/URL config.
-// Called from PersistentPreRunE so every subcommand can assume the
-// config is usable.
+// finalizeConfig validates the auth/URL config. Called from
+// PersistentPreRunE so every subcommand can assume the config is
+// usable.
 //
-// Validation is opt-in via the {@code annotationNeedsAuth} marker:
-// commands that don't perform network calls (the cobra-auto-generated
-// `completion <shell>` and `help <command>`, every parent group like
-// `tm profiles` that just prints child help, plus the explicit
-// `tm version`) skip the API-key check entirely. Without this,
-// first-run flows like `tm completion bash >> ~/.bashrc` would fail
-// before the user has even read the README's auth section.
+// Validation is opt-in via the annotationNeedsAuth marker:
+// commands that don't perform network calls (the cobra-auto-
+// generated `completion <shell>` and `help <command>`, every
+// parent group like `tm profiles` that just prints child help,
+// plus the explicit `tm version`) skip the auth/URL checks
+// entirely. Without this, first-run flows like
+// `tm completion bash >> ~/.bashrc` would fail before the user
+// has even read the README's auth section.
+//
+// For auth-required commands, both --api-key and --base-url
+// (or their env-var equivalents) must be set. There is no
+// built-in default base URL — the CLI refuses to assume which
+// TrafficMorph install the caller wants to talk to. The URL is
+// validated (scheme, host, no query/fragment) and the API key
+// is checked for header-invalid bytes; both surface as clear
+// pre-flight errors rather than opaque transport failures on
+// the first API call.
 func finalizeConfig(cmd *cobra.Command) error {
-	if config.BaseURL == "" {
-		config.BaseURL = defaultBaseURL
-	}
 	if cmd.Annotations[annotationNeedsAuth] != "true" {
 		return nil
 	}
 	if config.APIKey == "" {
 		return fmt.Errorf("API key is required; set $%s or pass --api-key", EnvAPIKey)
 	}
+	if err := validateHeaderValue(config.APIKey); err != nil {
+		return fmt.Errorf("--api-key: %w", err)
+	}
+	if config.BaseURL == "" {
+		return fmt.Errorf("base URL is required; set $%s or pass --base-url", EnvBaseURL)
+	}
+	if err := validateBaseURL(config.BaseURL); err != nil {
+		return fmt.Errorf("--base-url: %w", err)
+	}
+	config.BaseURL = normalizeBaseURL(config.BaseURL)
 	return nil
 }
 

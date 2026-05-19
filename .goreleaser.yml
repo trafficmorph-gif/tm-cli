@@ -48,7 +48,7 @@ builds:
       # `v` (e.g. "0.1.0"); we re-prefix with `v` to match the tag
       # users see on GitHub.
       - -s -w
-      - -X 'github.com/trafficmorph/tm-cli/internal/cli.CLIVersion=v{{.Version}}'
+      - -X 'github.com/trafficmorph-gif/tm-cli/internal/cli.CLIVersion=v{{.Version}}'
 
 archives:
   - id: tm-archives

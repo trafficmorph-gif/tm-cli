@@ -11,13 +11,9 @@ import (
 // during local development.
 var CLIVersion = "dev"
 
-// SpecVersion records which OpenAPI v1 snapshot the binary was
-// built against. Surfaced in `tm version` so a CI operator can
-// confirm the binary matches the server's API surface.
-//
-// Bumped manually when the snapshot is regenerated via
-// `make regen-spec` — kept in sync with the `version` field in the
-// committed openapi/v1.json.
+// SpecVersion records which `/api/v1` revision the binary targets.
+// Surfaced in `tm version` so a CI operator can confirm the
+// binary matches the server's API surface.
 const SpecVersion = "v1"
 
 func newVersionCmd() *cobra.Command {
