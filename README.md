@@ -85,7 +85,7 @@ tm v0.2.0 (spec v1)
 ## Prerequisites
 
 - **A TrafficMorph API key** in the form `tm_…`. Provision one from the in-app **Settings → API keys** page.
-- **A reachable TrafficMorph install.** Examples below assume `http://localhost:8080` for local development; swap for your hosted URL. There is no built-in default — the CLI requires the base URL to be set explicitly.
+- **A reachable TrafficMorph install.** Examples below assume `http://localhost:8092` for local development; swap for your hosted URL. There is no built-in default — the CLI requires the base URL to be set explicitly.
 
 ## Authentication
 

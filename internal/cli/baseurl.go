@@ -14,7 +14,7 @@ import (
 // silently misroute):
 //
 //   - `""` or whitespace-only        → "must not be empty"
-//   - `"localhost:8080"` (no scheme) → "must include http:// or https:// scheme"
+//   - `"localhost:8092"` (no scheme) → "must include http:// or https:// scheme"
 //   - `"ftp://x"` (wrong scheme)     → "scheme must be http or https"
 //   - `"https://"` (no host)         → "must include a host"
 //   - `"https://x/?q=1"`             → "must not contain a query string"
