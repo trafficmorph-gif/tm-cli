@@ -49,7 +49,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Check out the repo at the tagged commit
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
         with:
           # goreleaser needs the full history + tags to compute the
           # changelog (diff against the previous tag). Default depth
@@ -57,7 +57,7 @@ jobs:
           fetch-depth: 0
 
       - name: Set up Go
-        uses: actions/setup-go@v5
+        uses: actions/setup-go@v7
         with:
           # Pinned to the toolchain version goreleaser was tested
           # against locally. Bump both this AND GORELEASER_VERSION
