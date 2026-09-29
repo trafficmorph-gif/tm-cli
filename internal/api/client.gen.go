@@ -23,6 +23,69 @@ const (
 	BearerAuthScopes bearerAuthContextKey = "BearerAuth.Scopes"
 )
 
+// Defines values for ApiAccountResponseDeploymentMode.
+const (
+	CLOUD      ApiAccountResponseDeploymentMode = "CLOUD"
+	SELFHOSTED ApiAccountResponseDeploymentMode = "SELF_HOSTED"
+)
+
+// Valid indicates whether the value is a known member of the ApiAccountResponseDeploymentMode enum.
+func (e ApiAccountResponseDeploymentMode) Valid() bool {
+	switch e {
+	case CLOUD:
+		return true
+	case SELFHOSTED:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for ApiAccountResponseSubscriptionStatus.
+const (
+	ACTIVE   ApiAccountResponseSubscriptionStatus = "ACTIVE"
+	CANCELED ApiAccountResponseSubscriptionStatus = "CANCELED"
+	NONE     ApiAccountResponseSubscriptionStatus = "NONE"
+	PASTDUE  ApiAccountResponseSubscriptionStatus = "PAST_DUE"
+)
+
+// Valid indicates whether the value is a known member of the ApiAccountResponseSubscriptionStatus enum.
+func (e ApiAccountResponseSubscriptionStatus) Valid() bool {
+	switch e {
+	case ACTIVE:
+		return true
+	case CANCELED:
+		return true
+	case NONE:
+		return true
+	case PASTDUE:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for ApiAccountResponseSubscriptionType.
+const (
+	BUSINESS ApiAccountResponseSubscriptionType = "BUSINESS"
+	SOLO     ApiAccountResponseSubscriptionType = "SOLO"
+	TEAM     ApiAccountResponseSubscriptionType = "TEAM"
+)
+
+// Valid indicates whether the value is a known member of the ApiAccountResponseSubscriptionType enum.
+func (e ApiAccountResponseSubscriptionType) Valid() bool {
+	switch e {
+	case BUSINESS:
+		return true
+	case SOLO:
+		return true
+	case TEAM:
+		return true
+	default:
+		return false
+	}
+}
+
 // Defines values for ApiProfileRequestInterpolationMode.
 const (
 	LINEAR ApiProfileRequestInterpolationMode = "LINEAR"
@@ -59,6 +122,24 @@ func (e ApiRunStatusResponseStatus) Valid() bool {
 	case PAUSED:
 		return true
 	case RUNNING:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for CaptureSourceResponseKind.
+const (
+	S3   CaptureSourceResponseKind = "S3"
+	SFTP CaptureSourceResponseKind = "SFTP"
+)
+
+// Valid indicates whether the value is a known member of the CaptureSourceResponseKind enum.
+func (e CaptureSourceResponseKind) Valid() bool {
+	switch e {
+	case S3:
+		return true
+	case SFTP:
 		return true
 	default:
 		return false
@@ -128,9 +209,141 @@ func (e VariablesSetResponseMode) Valid() bool {
 	}
 }
 
+// AccountFeatures Plan-gated capabilities available to this account.
+type AccountFeatures struct {
+	// DomainVerificationRequired Runs may only target domains verified via `/api/v1/domains`. False only for administrator accounts.
+	DomainVerificationRequired *bool `json:"domainVerificationRequired,omitempty"`
+
+	// LifecycleScripts Profiles may carry init and cleanup scripts. When false, saving or starting a profile with either script returns 400. Response scripts are available on every plan.
+	LifecycleScripts *bool `json:"lifecycleScripts,omitempty"`
+
+	// RemoteRegions Runs may be dispatched from regions other than `local` (`GET /api/v1/regions` lists them). When false, a non-local `region` is rejected with 400.
+	RemoteRegions *bool `json:"remoteRegions,omitempty"`
+}
+
+// AccountLimits Effective limits for this account: the plan's defaults with any per-account admin overrides applied.
+type AccountLimits struct {
+	// ApiRequestsPerMinute Public-API calls allowed per user in a sliding 60-second window, shared by all of the account's API keys. Beyond it the API answers 429 with a `Retry-After` header.
+	ApiRequestsPerMinute *int32 `json:"apiRequestsPerMinute,omitempty"`
+
+	// HistoryRetentionDays Days run history is kept before the nightly cleanup deletes it. Null when the account has no own setting and the server-wide default applies.
+	HistoryRetentionDays *int32 `json:"historyRetentionDays,omitempty"`
+
+	// MaxConcurrentRuns How many runs may be `RUNNING` or `PAUSED` at the same time. Starting another returns 400 "Concurrent run limit reached"; restarting a profile that is already running replaces its run and needs no free slot. 0 = no cap.
+	MaxConcurrentRuns *int32 `json:"maxConcurrentRuns,omitempty"`
+
+	// MaxNotifyEmails Maximum recipient addresses per list: a schedule's notify emails and a profile's regression-alert recipients.
+	MaxNotifyEmails *int32 `json:"maxNotifyEmails,omitempty"`
+
+	// MaxProfileRps Per-run requests-per-second cap applied to each profile's curve on top of `maxRps`. Null = no per-run cap (only `maxRps` applies).
+	MaxProfileRps *int32 `json:"maxProfileRps,omitempty"`
+
+	// MaxProfiles Maximum saved profiles. Creating one more returns 400 "Profile limit reached".
+	MaxProfiles *int32 `json:"maxProfiles,omitempty"`
+
+	// MaxRequestBytes Maximum UTF-8 size of a profile's `requestBody` plus its `requestHeaders` JSON string. Checked when a profile is saved and when a run starts. 0 = no cap.
+	MaxRequestBytes *int32 `json:"maxRequestBytes,omitempty"`
+
+	// MaxRequestHeaderBytes Maximum UTF-8 size of one header line: name + value + 4 bytes for the `: ` separator and line break. 0 = no cap.
+	MaxRequestHeaderBytes *int32 `json:"maxRequestHeaderBytes,omitempty"`
+
+	// MaxRequestHeaderCount Maximum number of request headers. 0 = no cap.
+	MaxRequestHeaderCount *int32 `json:"maxRequestHeaderCount,omitempty"`
+
+	// MaxRequestHeadersBytes Maximum UTF-8 size of the `requestHeaders` JSON string. 0 = no cap.
+	MaxRequestHeadersBytes *int32 `json:"maxRequestHeadersBytes,omitempty"`
+
+	// MaxRps Account-wide requests-per-second cap, shared by all of the account's concurrently running profiles (including follow-up requests sent from response scripts). Curve points above it are accepted; dispatch is clamped to the cap. 0 = no cap.
+	MaxRps *int32 `json:"maxRps,omitempty"`
+
+	// MaxScheduledRuns Maximum schedule slots (day-of-week + time entries) across all profiles.
+	MaxScheduledRuns *int32 `json:"maxScheduledRuns,omitempty"`
+
+	// MaxVariablesSets Maximum uploaded variables sets (CSV data sets).
+	MaxVariablesSets *int32 `json:"maxVariablesSets,omitempty"`
+}
+
+// AccountUsage Current consumption of the account's limits.
+type AccountUsage struct {
+	// ActiveRunCount Runs currently `RUNNING` or `PAUSED`; compare with `limits.maxConcurrentRuns`.
+	ActiveRunCount *int32 `json:"activeRunCount,omitempty"`
+
+	// IncludedRequests Monthly request quota. Once `usedRequests` reaches it, starting a run returns 409 `USAGE_LIMIT_REACHED` and looping runs complete at the end of their current iteration; a run already in flight is not cut short. 0 = no monthly quota (always 0 in `SELF_HOSTED`).
+	IncludedRequests *int64 `json:"includedRequests,omitempty"`
+
+	// ProfileCount Saved profiles; compare with `limits.maxProfiles`.
+	ProfileCount *int64 `json:"profileCount,omitempty"`
+
+	// ScheduledRunCount Schedule slots in use; compare with `limits.maxScheduledRuns`.
+	ScheduledRunCount *int64 `json:"scheduledRunCount,omitempty"`
+
+	// UsedRequests Requests sent this calendar month (UTC), including requests of runs still in flight.
+	UsedRequests *int64 `json:"usedRequests,omitempty"`
+
+	// VariablesSetCount Uploaded variables sets; compare with `limits.maxVariablesSets`.
+	VariablesSetCount *int64 `json:"variablesSetCount,omitempty"`
+}
+
 // AddDomainRequest defines model for AddDomainRequest.
 type AddDomainRequest struct {
 	Domain string `json:"domain"`
+}
+
+// ApiAccountResponse The calling account's plan, the limits the server enforces, current usage against them, and which plan-gated features are available. Read it before creating profiles or starting runs to stay within limits. Unless a field says otherwise, a limit of 0 means "none allowed", not "unlimited".
+type ApiAccountResponse struct {
+	// DeploymentMode `CLOUD` (hosted service: plans, trial, monthly request quota) or `SELF_HOSTED` (on-prem install: no trial, no monthly quota, every account gets the highest plan's limits unless an admin set per-account overrides).
+	DeploymentMode *ApiAccountResponseDeploymentMode `json:"deploymentMode,omitempty"`
+
+	// Features Plan-gated capabilities available to this account.
+	Features *AccountFeatures `json:"features,omitempty"`
+
+	// GraceEndsAt End of the grace period that follows a canceled subscription; until then the API stays available even though `trialExpired` is true. Null when no grace period is running.
+	GraceEndsAt *time.Time `json:"graceEndsAt,omitempty"`
+
+	// Limits Effective limits for this account: the plan's defaults with any per-account admin overrides applied.
+	Limits *AccountLimits `json:"limits,omitempty"`
+
+	// SubscriptionStatus Billing state of the paid subscription; `NONE` when there is none (trial accounts, self-hosted installs).
+	SubscriptionStatus *ApiAccountResponseSubscriptionStatus `json:"subscriptionStatus,omitempty"`
+
+	// SubscriptionType Plan tier. In `CLOUD` the limits below derive from it; in `SELF_HOSTED` every account gets `BUSINESS` limits whatever is stored here.
+	SubscriptionType *ApiAccountResponseSubscriptionType `json:"subscriptionType,omitempty"`
+
+	// TrialEndsAt When the free trial ends (or ended). Null when the account has no trial clock, and always null in `SELF_HOSTED`.
+	TrialEndsAt *time.Time `json:"trialEndsAt,omitempty"`
+
+	// TrialExpired True once `trialEndsAt` has passed and the subscription isn't `ACTIVE`. The API then answers 403 `{"error":"trial_expired"}` to every call except during a grace period (`graceEndsAt`). Always false in `SELF_HOSTED`.
+	TrialExpired *bool `json:"trialExpired,omitempty"`
+
+	// Usage Current consumption of the account's limits.
+	Usage *AccountUsage `json:"usage,omitempty"`
+}
+
+// ApiAccountResponseDeploymentMode `CLOUD` (hosted service: plans, trial, monthly request quota) or `SELF_HOSTED` (on-prem install: no trial, no monthly quota, every account gets the highest plan's limits unless an admin set per-account overrides).
+type ApiAccountResponseDeploymentMode string
+
+// ApiAccountResponseSubscriptionStatus Billing state of the paid subscription; `NONE` when there is none (trial accounts, self-hosted installs).
+type ApiAccountResponseSubscriptionStatus string
+
+// ApiAccountResponseSubscriptionType Plan tier. In `CLOUD` the limits below derive from it; in `SELF_HOSTED` every account gets `BUSINESS` limits whatever is stored here.
+type ApiAccountResponseSubscriptionType string
+
+// ApiHistoryFiltersResponse Values accepted by the `GET /api/v1/history` query filters. `profiles`, `regions` and `tags` are drawn from the caller's run history, so each one matches at least one stored run; `triggeredBy` and `autoVerdicts` are the fixed value sets.
+type ApiHistoryFiltersResponse struct {
+	// AutoVerdicts Accepted `autoVerdict` values: the regression verdict against the profile's baseline run.
+	AutoVerdicts *[]string `json:"autoVerdicts,omitempty"`
+
+	// Profiles Profiles that have at least one run in history, sorted by name. Includes profiles deleted since; use `id` as the `profileId` filter.
+	Profiles *[]HistoryProfileOption `json:"profiles,omitempty"`
+
+	// Regions Region codes runs were dispatched from, sorted (`local` for the in-process region). Use as the `region` filter.
+	Regions *[]string `json:"regions,omitempty"`
+
+	// Tags Every tag applied to at least one run, sorted. Use as the `tag` filter.
+	Tags *[]string `json:"tags,omitempty"`
+
+	// TriggeredBy Accepted `triggeredBy` values: `api` (public API), `manual` (web UI), `scheduled` (schedule slot).
+	TriggeredBy *[]string `json:"triggeredBy,omitempty"`
 }
 
 // ApiProfileRequest Create or update payload for a traffic profile. The `points` array defines the RPS curve (one or more (x,y) coordinates where x is seconds since run-start and y is target RPS). The optional `schedule` block atomically creates or replaces an automated schedule alongside the profile.
@@ -154,7 +367,7 @@ type ApiProfileRequest struct {
 	// ReadinessUrl URL checked before a scheduled run fires; while it isn't ready the run is postponed (up to 15 minutes) or skipped. Null keeps the current value; `""` clears it.
 	ReadinessUrl *string `json:"readinessUrl,omitempty"`
 
-	// Region Default dispatch region code for the profile's runs â web UI, scheduled, and API runs that don't pick one (see `GET /api/v1/regions`). Null keeps the current value; `""` clears it (local).
+	// Region Default dispatch region code for the profile's runs — web UI, scheduled, and API runs that don't pick one (see `GET /api/v1/regions`). Null keeps the current value; `""` clears it (local).
 	Region         *string        `json:"region,omitempty"`
 	RequestBody    *string        `json:"requestBody,omitempty"`
 	RequestHeaders *string        `json:"requestHeaders,omitempty"`
@@ -235,7 +448,7 @@ type ApiRunStatusResponse struct {
 	// RequestsSent Requests dispatched so far.
 	RequestsSent *int64 `json:"requestsSent,omitempty"`
 
-	// ResponseCodeCounts HTTP status code â responses so far.
+	// ResponseCodeCounts HTTP status code → responses so far.
 	ResponseCodeCounts *map[string]int64 `json:"responseCodeCounts,omitempty"`
 
 	// RunId In-memory run id (matches `runId` on the history row); null when idle.
@@ -272,10 +485,36 @@ type BoxStats struct {
 	Q3     *float64 `json:"q3,omitempty"`
 }
 
+// CaptureAnalyseRemoteRequest defines model for CaptureAnalyseRemoteRequest.
+type CaptureAnalyseRemoteRequest struct {
+	// Path File `path` as returned by the source's file listing (SFTP path or S3 key). Must lie inside the source's `rootPath`.
+	Path string `json:"path"`
+
+	// SourceId Id of one of the caller's capture sources.
+	SourceId int64 `json:"sourceId"`
+}
+
 // CaptureAnalysisResponse defines model for CaptureAnalysisResponse.
 type CaptureAnalysisResponse struct {
 	Groups *[]Group `json:"groups,omitempty"`
 	Stats  *Stats   `json:"stats,omitempty"`
+}
+
+// CaptureImportRemoteRequest defines model for CaptureImportRemoteRequest.
+type CaptureImportRemoteRequest struct {
+	// Path File `path` as returned by the source's file listing; the same file you analysed.
+	Path string `json:"path"`
+
+	// Selections Groups to import, keyed by `(method, urlSkeleton)` from the analysis. An empty `groups` list is a no-op.
+	Selections CaptureImportRequest `json:"selections"`
+
+	// SourceId Id of one of the caller's capture sources.
+	SourceId int64 `json:"sourceId"`
+}
+
+// CaptureImportRequest Groups to import, keyed by `(method, urlSkeleton)` from the analysis. An empty `groups` list is a no-op.
+type CaptureImportRequest struct {
+	Groups []GroupSelection `json:"groups"`
 }
 
 // CaptureImportResult defines model for CaptureImportResult.
@@ -285,6 +524,41 @@ type CaptureImportResult struct {
 	SkippedSelections        *[]SkippedSelection `json:"skippedSelections,omitempty"`
 	Warnings                 *[]string           `json:"warnings,omitempty"`
 }
+
+// CaptureSourceFile A `.jsonl` / `.ndjson` file found on a capture source.
+type CaptureSourceFile struct {
+	// ModifiedAt Last-modified time reported by the remote server (best effort; `1970-01-01T00:00:00Z` when unknown). Listings are ordered newest first.
+	ModifiedAt *time.Time `json:"modifiedAt,omitempty"`
+
+	// Path File identifier on the source (SFTP path or S3 key). Pass it verbatim as `path` to `analyseRemoteCapture` / `importRemoteCapture`.
+	Path *string `json:"path,omitempty"`
+
+	// Size Size in bytes as reported by the remote server; 0 or -1 when it didn't report one.
+	Size *int64 `json:"size,omitempty"`
+}
+
+// CaptureSourceResponse A remote capture source (SFTP server or S3 bucket) configured in the web UI. Stored credentials are never returned.
+type CaptureSourceResponse struct {
+	CreatedAt *time.Time `json:"createdAt,omitempty"`
+
+	// Id Source id; use it as `sourceId` for remote capture analyse / import.
+	Id   *int64                     `json:"id,omitempty"`
+	Kind *CaptureSourceResponseKind `json:"kind,omitempty"`
+
+	// LastError Error from the most recent failed test, listing or read; null after a success.
+	LastError *string `json:"lastError,omitempty"`
+
+	// LastListedAt When the source was last listed or read successfully; null if never.
+	LastListedAt *time.Time `json:"lastListedAt,omitempty"`
+	Name         *string    `json:"name,omitempty"`
+
+	// RootPath Directory (SFTP) or key prefix (S3) that file listing and reads are confined to; null means the SFTP login directory or the bucket root.
+	RootPath  *string    `json:"rootPath,omitempty"`
+	UpdatedAt *time.Time `json:"updatedAt,omitempty"`
+}
+
+// CaptureSourceResponseKind defines model for CaptureSourceResponse.Kind.
+type CaptureSourceResponseKind string
 
 // ChangeVariablesSetModeRequest defines model for ChangeVariablesSetModeRequest.
 type ChangeVariablesSetModeRequest struct {
@@ -337,11 +611,40 @@ type Group struct {
 	Variables       *[]Variable   `json:"variables,omitempty"`
 }
 
+// GroupSelection defines model for GroupSelection.
+type GroupSelection struct {
+	// Method `method` of the analysis group, e.g. `GET`.
+	Method string `json:"method"`
+
+	// ProfileName Name for the new profile. Omitted or blank: a default such as `[capture] POST /api/bid`.
+	ProfileName *string `json:"profileName,omitempty"`
+
+	// UrlSkeleton `urlSkeleton` of the analysis group, copied exactly.
+	UrlSkeleton string `json:"urlSkeleton"`
+}
+
 // HistogramBin defines model for HistogramBin.
 type HistogramBin struct {
 	Count *int32   `json:"count,omitempty"`
 	Max   *float64 `json:"max,omitempty"`
 	Min   *float64 `json:"min,omitempty"`
+}
+
+// HistoryProfileOption Profiles that have at least one run in history, sorted by name. Includes profiles deleted since; use `id` as the `profileId` filter.
+type HistoryProfileOption struct {
+	// Id Profile id; the `profileId` filter value.
+	Id *int64 `json:"id,omitempty"`
+
+	// Name Profile name as of its most recent run.
+	Name *string `json:"name,omitempty"`
+}
+
+// ImportTrafficProfileResponse defines model for ImportTrafficProfileResponse.
+type ImportTrafficProfileResponse struct {
+	CallbackSecret *string   `json:"callbackSecret,omitempty"`
+	Id             *int64    `json:"id,omitempty"`
+	Name           *string   `json:"name,omitempty"`
+	Warnings       *[]string `json:"warnings,omitempty"`
 }
 
 // LatencyComparison defines model for LatencyComparison.
@@ -533,6 +836,12 @@ type apiKeyAuthContextKey string
 // bearerAuthContextKey is the context key for BearerAuth security scheme
 type bearerAuthContextKey string
 
+// ListCaptureSourceFilesParams defines parameters for ListCaptureSourceFiles.
+type ListCaptureSourceFilesParams struct {
+	// Limit Maximum number of files to return. Values outside 1 to 1000 are clamped into that range.
+	Limit *int32 `form:"limit,omitempty" json:"limit,omitempty"`
+}
+
 // AnalyseMultipartBody defines parameters for Analyse.
 type AnalyseMultipartBody struct {
 	// File JSONL traffic-capture file. Each line is one captured request (method, url, timestamp, optional headers + body).
@@ -541,7 +850,7 @@ type AnalyseMultipartBody struct {
 
 // ImportCaptureMultipartBody defines parameters for ImportCapture.
 type ImportCaptureMultipartBody struct {
-	// File JSONL traffic-capture file â the same file you analysed.
+	// File JSONL traffic-capture file — the same file you analysed.
 	File openapi_types.File `json:"file"`
 }
 
@@ -574,10 +883,10 @@ type ListHistoryParams struct {
 	// Tag Filter by tag.
 	Tag *string `form:"tag,omitempty" json:"tag,omitempty"`
 
-	// From Lower bound on `startedAt` (ISO-8601).
+	// From Lower bound on the run's `createdAt` (ISO-8601), the time its history row was written when the run finished.
 	From *time.Time `form:"from,omitempty" json:"from,omitempty"`
 
-	// To Upper bound on `startedAt` (ISO-8601).
+	// To Upper bound on the run's `createdAt` (ISO-8601), the time its history row was written when the run finished.
 	To *time.Time `form:"to,omitempty" json:"to,omitempty"`
 }
 
@@ -590,17 +899,29 @@ type CompareRunsParams struct {
 	RunB int64 `form:"runB" json:"runB"`
 }
 
+// ImportProfileJSONBody defines parameters for ImportProfile.
+type ImportProfileJSONBody map[string]interface{}
+
 // AnalyseMultipartRequestBody defines body for Analyse for multipart/form-data ContentType.
 type AnalyseMultipartRequestBody AnalyseMultipartBody
 
+// AnalyseRemoteCaptureJSONRequestBody defines body for AnalyseRemoteCapture for application/json ContentType.
+type AnalyseRemoteCaptureJSONRequestBody = CaptureAnalyseRemoteRequest
+
 // ImportCaptureMultipartRequestBody defines body for ImportCapture for multipart/form-data ContentType.
 type ImportCaptureMultipartRequestBody ImportCaptureMultipartBody
+
+// ImportRemoteCaptureJSONRequestBody defines body for ImportRemoteCapture for application/json ContentType.
+type ImportRemoteCaptureJSONRequestBody = CaptureImportRemoteRequest
 
 // AddJSONRequestBody defines body for Add for application/json ContentType.
 type AddJSONRequestBody = AddDomainRequest
 
 // CreateProfileJSONRequestBody defines body for CreateProfile for application/json ContentType.
 type CreateProfileJSONRequestBody = ApiProfileRequest
+
+// ImportProfileJSONRequestBody defines body for ImportProfile for application/json ContentType.
+type ImportProfileJSONRequestBody ImportProfileJSONBody
 
 // UpdateProfileJSONRequestBody defines body for UpdateProfile for application/json ContentType.
 type UpdateProfileJSONRequestBody = ApiProfileRequest
@@ -690,11 +1011,30 @@ func WithRequestEditorFn(fn RequestEditorFn) ClientOption {
 
 // The interface specification for the client above.
 type ClientInterface interface {
+	// GetAccount request
+	GetAccount(ctx context.Context, reqEditors ...RequestEditorFn) (*http.Response, error)
+
+	// ListCaptureSources request
+	ListCaptureSources(ctx context.Context, reqEditors ...RequestEditorFn) (*http.Response, error)
+
+	// ListCaptureSourceFiles request
+	ListCaptureSourceFiles(ctx context.Context, id int64, params *ListCaptureSourceFilesParams, reqEditors ...RequestEditorFn) (*http.Response, error)
+
 	// AnalyseWithBody request with any body
 	AnalyseWithBody(ctx context.Context, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*http.Response, error)
 
+	// AnalyseRemoteCaptureWithBody request with any body
+	AnalyseRemoteCaptureWithBody(ctx context.Context, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*http.Response, error)
+
+	AnalyseRemoteCapture(ctx context.Context, body AnalyseRemoteCaptureJSONRequestBody, reqEditors ...RequestEditorFn) (*http.Response, error)
+
 	// ImportCaptureWithBody request with any body
 	ImportCaptureWithBody(ctx context.Context, params *ImportCaptureParams, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*http.Response, error)
+
+	// ImportRemoteCaptureWithBody request with any body
+	ImportRemoteCaptureWithBody(ctx context.Context, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*http.Response, error)
+
+	ImportRemoteCapture(ctx context.Context, body ImportRemoteCaptureJSONRequestBody, reqEditors ...RequestEditorFn) (*http.Response, error)
 
 	// ListDomains request
 	ListDomains(ctx context.Context, reqEditors ...RequestEditorFn) (*http.Response, error)
@@ -719,6 +1059,12 @@ type ClientInterface interface {
 	// CompareRuns request
 	CompareRuns(ctx context.Context, params *CompareRunsParams, reqEditors ...RequestEditorFn) (*http.Response, error)
 
+	// ListHistoryFilters request
+	ListHistoryFilters(ctx context.Context, reqEditors ...RequestEditorFn) (*http.Response, error)
+
+	// DeleteRun request
+	DeleteRun(ctx context.Context, id int64, reqEditors ...RequestEditorFn) (*http.Response, error)
+
 	// GetHistoryItem request
 	GetHistoryItem(ctx context.Context, id int64, reqEditors ...RequestEditorFn) (*http.Response, error)
 
@@ -729,6 +1075,11 @@ type ClientInterface interface {
 	CreateProfileWithBody(ctx context.Context, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*http.Response, error)
 
 	CreateProfile(ctx context.Context, body CreateProfileJSONRequestBody, reqEditors ...RequestEditorFn) (*http.Response, error)
+
+	// ImportProfileWithBody request with any body
+	ImportProfileWithBody(ctx context.Context, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*http.Response, error)
+
+	ImportProfile(ctx context.Context, body ImportProfileJSONRequestBody, reqEditors ...RequestEditorFn) (*http.Response, error)
 
 	// DeleteProfile request
 	DeleteProfile(ctx context.Context, id int64, reqEditors ...RequestEditorFn) (*http.Response, error)
@@ -741,6 +1092,9 @@ type ClientInterface interface {
 
 	UpdateProfile(ctx context.Context, id int64, body UpdateProfileJSONRequestBody, reqEditors ...RequestEditorFn) (*http.Response, error)
 
+	// ExportProfile request
+	ExportProfile(ctx context.Context, id int64, reqEditors ...RequestEditorFn) (*http.Response, error)
+
 	// Pause request
 	Pause(ctx context.Context, id int64, reqEditors ...RequestEditorFn) (*http.Response, error)
 
@@ -751,6 +1105,9 @@ type ClientInterface interface {
 	StartRunWithBody(ctx context.Context, id int64, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*http.Response, error)
 
 	StartRun(ctx context.Context, id int64, body StartRunJSONRequestBody, reqEditors ...RequestEditorFn) (*http.Response, error)
+
+	// DeleteSchedule request
+	DeleteSchedule(ctx context.Context, id int64, reqEditors ...RequestEditorFn) (*http.Response, error)
 
 	// Start request
 	Start(ctx context.Context, id int64, reqEditors ...RequestEditorFn) (*http.Response, error)
@@ -789,6 +1146,42 @@ type ClientInterface interface {
 	ChangeMode(ctx context.Context, id int64, body ChangeModeJSONRequestBody, reqEditors ...RequestEditorFn) (*http.Response, error)
 }
 
+func (c *Client) GetAccount(ctx context.Context, reqEditors ...RequestEditorFn) (*http.Response, error) {
+	req, err := NewGetAccountRequest(c.Server)
+	if err != nil {
+		return nil, err
+	}
+	req = req.WithContext(ctx)
+	if err := c.applyEditors(ctx, req, reqEditors); err != nil {
+		return nil, err
+	}
+	return c.Client.Do(req)
+}
+
+func (c *Client) ListCaptureSources(ctx context.Context, reqEditors ...RequestEditorFn) (*http.Response, error) {
+	req, err := NewListCaptureSourcesRequest(c.Server)
+	if err != nil {
+		return nil, err
+	}
+	req = req.WithContext(ctx)
+	if err := c.applyEditors(ctx, req, reqEditors); err != nil {
+		return nil, err
+	}
+	return c.Client.Do(req)
+}
+
+func (c *Client) ListCaptureSourceFiles(ctx context.Context, id int64, params *ListCaptureSourceFilesParams, reqEditors ...RequestEditorFn) (*http.Response, error) {
+	req, err := NewListCaptureSourceFilesRequest(c.Server, id, params)
+	if err != nil {
+		return nil, err
+	}
+	req = req.WithContext(ctx)
+	if err := c.applyEditors(ctx, req, reqEditors); err != nil {
+		return nil, err
+	}
+	return c.Client.Do(req)
+}
+
 func (c *Client) AnalyseWithBody(ctx context.Context, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*http.Response, error) {
 	req, err := NewAnalyseRequestWithBody(c.Server, contentType, body)
 	if err != nil {
@@ -801,8 +1194,56 @@ func (c *Client) AnalyseWithBody(ctx context.Context, contentType string, body i
 	return c.Client.Do(req)
 }
 
+func (c *Client) AnalyseRemoteCaptureWithBody(ctx context.Context, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*http.Response, error) {
+	req, err := NewAnalyseRemoteCaptureRequestWithBody(c.Server, contentType, body)
+	if err != nil {
+		return nil, err
+	}
+	req = req.WithContext(ctx)
+	if err := c.applyEditors(ctx, req, reqEditors); err != nil {
+		return nil, err
+	}
+	return c.Client.Do(req)
+}
+
+func (c *Client) AnalyseRemoteCapture(ctx context.Context, body AnalyseRemoteCaptureJSONRequestBody, reqEditors ...RequestEditorFn) (*http.Response, error) {
+	req, err := NewAnalyseRemoteCaptureRequest(c.Server, body)
+	if err != nil {
+		return nil, err
+	}
+	req = req.WithContext(ctx)
+	if err := c.applyEditors(ctx, req, reqEditors); err != nil {
+		return nil, err
+	}
+	return c.Client.Do(req)
+}
+
 func (c *Client) ImportCaptureWithBody(ctx context.Context, params *ImportCaptureParams, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*http.Response, error) {
 	req, err := NewImportCaptureRequestWithBody(c.Server, params, contentType, body)
+	if err != nil {
+		return nil, err
+	}
+	req = req.WithContext(ctx)
+	if err := c.applyEditors(ctx, req, reqEditors); err != nil {
+		return nil, err
+	}
+	return c.Client.Do(req)
+}
+
+func (c *Client) ImportRemoteCaptureWithBody(ctx context.Context, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*http.Response, error) {
+	req, err := NewImportRemoteCaptureRequestWithBody(c.Server, contentType, body)
+	if err != nil {
+		return nil, err
+	}
+	req = req.WithContext(ctx)
+	if err := c.applyEditors(ctx, req, reqEditors); err != nil {
+		return nil, err
+	}
+	return c.Client.Do(req)
+}
+
+func (c *Client) ImportRemoteCapture(ctx context.Context, body ImportRemoteCaptureJSONRequestBody, reqEditors ...RequestEditorFn) (*http.Response, error) {
+	req, err := NewImportRemoteCaptureRequest(c.Server, body)
 	if err != nil {
 		return nil, err
 	}
@@ -909,6 +1350,30 @@ func (c *Client) CompareRuns(ctx context.Context, params *CompareRunsParams, req
 	return c.Client.Do(req)
 }
 
+func (c *Client) ListHistoryFilters(ctx context.Context, reqEditors ...RequestEditorFn) (*http.Response, error) {
+	req, err := NewListHistoryFiltersRequest(c.Server)
+	if err != nil {
+		return nil, err
+	}
+	req = req.WithContext(ctx)
+	if err := c.applyEditors(ctx, req, reqEditors); err != nil {
+		return nil, err
+	}
+	return c.Client.Do(req)
+}
+
+func (c *Client) DeleteRun(ctx context.Context, id int64, reqEditors ...RequestEditorFn) (*http.Response, error) {
+	req, err := NewDeleteRunRequest(c.Server, id)
+	if err != nil {
+		return nil, err
+	}
+	req = req.WithContext(ctx)
+	if err := c.applyEditors(ctx, req, reqEditors); err != nil {
+		return nil, err
+	}
+	return c.Client.Do(req)
+}
+
 func (c *Client) GetHistoryItem(ctx context.Context, id int64, reqEditors ...RequestEditorFn) (*http.Response, error) {
 	req, err := NewGetHistoryItemRequest(c.Server, id)
 	if err != nil {
@@ -947,6 +1412,30 @@ func (c *Client) CreateProfileWithBody(ctx context.Context, contentType string, 
 
 func (c *Client) CreateProfile(ctx context.Context, body CreateProfileJSONRequestBody, reqEditors ...RequestEditorFn) (*http.Response, error) {
 	req, err := NewCreateProfileRequest(c.Server, body)
+	if err != nil {
+		return nil, err
+	}
+	req = req.WithContext(ctx)
+	if err := c.applyEditors(ctx, req, reqEditors); err != nil {
+		return nil, err
+	}
+	return c.Client.Do(req)
+}
+
+func (c *Client) ImportProfileWithBody(ctx context.Context, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*http.Response, error) {
+	req, err := NewImportProfileRequestWithBody(c.Server, contentType, body)
+	if err != nil {
+		return nil, err
+	}
+	req = req.WithContext(ctx)
+	if err := c.applyEditors(ctx, req, reqEditors); err != nil {
+		return nil, err
+	}
+	return c.Client.Do(req)
+}
+
+func (c *Client) ImportProfile(ctx context.Context, body ImportProfileJSONRequestBody, reqEditors ...RequestEditorFn) (*http.Response, error) {
+	req, err := NewImportProfileRequest(c.Server, body)
 	if err != nil {
 		return nil, err
 	}
@@ -1005,6 +1494,18 @@ func (c *Client) UpdateProfile(ctx context.Context, id int64, body UpdateProfile
 	return c.Client.Do(req)
 }
 
+func (c *Client) ExportProfile(ctx context.Context, id int64, reqEditors ...RequestEditorFn) (*http.Response, error) {
+	req, err := NewExportProfileRequest(c.Server, id)
+	if err != nil {
+		return nil, err
+	}
+	req = req.WithContext(ctx)
+	if err := c.applyEditors(ctx, req, reqEditors); err != nil {
+		return nil, err
+	}
+	return c.Client.Do(req)
+}
+
 func (c *Client) Pause(ctx context.Context, id int64, reqEditors ...RequestEditorFn) (*http.Response, error) {
 	req, err := NewPauseRequest(c.Server, id)
 	if err != nil {
@@ -1043,6 +1544,18 @@ func (c *Client) StartRunWithBody(ctx context.Context, id int64, contentType str
 
 func (c *Client) StartRun(ctx context.Context, id int64, body StartRunJSONRequestBody, reqEditors ...RequestEditorFn) (*http.Response, error) {
 	req, err := NewStartRunRequest(c.Server, id, body)
+	if err != nil {
+		return nil, err
+	}
+	req = req.WithContext(ctx)
+	if err := c.applyEditors(ctx, req, reqEditors); err != nil {
+		return nil, err
+	}
+	return c.Client.Do(req)
+}
+
+func (c *Client) DeleteSchedule(ctx context.Context, id int64, reqEditors ...RequestEditorFn) (*http.Response, error) {
+	req, err := NewDeleteScheduleRequest(c.Server, id)
 	if err != nil {
 		return nil, err
 	}
@@ -1209,6 +1722,121 @@ func (c *Client) ChangeMode(ctx context.Context, id int64, body ChangeModeJSONRe
 	return c.Client.Do(req)
 }
 
+// NewGetAccountRequest generates requests for GetAccount
+func NewGetAccountRequest(server string) (*http.Request, error) {
+	var err error
+
+	serverURL, err := url.Parse(server)
+	if err != nil {
+		return nil, err
+	}
+
+	operationPath := fmt.Sprintf("/api/v1/account")
+	if operationPath[0] == '/' {
+		operationPath = "." + operationPath
+	}
+
+	queryURL, err := serverURL.Parse(operationPath)
+	if err != nil {
+		return nil, err
+	}
+
+	req, err := http.NewRequest(http.MethodGet, queryURL.String(), nil)
+	if err != nil {
+		return nil, err
+	}
+
+	return req, nil
+}
+
+// NewListCaptureSourcesRequest generates requests for ListCaptureSources
+func NewListCaptureSourcesRequest(server string) (*http.Request, error) {
+	var err error
+
+	serverURL, err := url.Parse(server)
+	if err != nil {
+		return nil, err
+	}
+
+	operationPath := fmt.Sprintf("/api/v1/capture-sources")
+	if operationPath[0] == '/' {
+		operationPath = "." + operationPath
+	}
+
+	queryURL, err := serverURL.Parse(operationPath)
+	if err != nil {
+		return nil, err
+	}
+
+	req, err := http.NewRequest(http.MethodGet, queryURL.String(), nil)
+	if err != nil {
+		return nil, err
+	}
+
+	return req, nil
+}
+
+// NewListCaptureSourceFilesRequest generates requests for ListCaptureSourceFiles
+func NewListCaptureSourceFilesRequest(server string, id int64, params *ListCaptureSourceFilesParams) (*http.Request, error) {
+	var err error
+
+	var pathParam0 string
+
+	pathParam0, err = runtime.StyleParamWithOptions("simple", false, "id", id, runtime.StyleParamOptions{ParamLocation: runtime.ParamLocationPath, Type: "integer", Format: "int64"})
+	if err != nil {
+		return nil, err
+	}
+
+	serverURL, err := url.Parse(server)
+	if err != nil {
+		return nil, err
+	}
+
+	operationPath := fmt.Sprintf("/api/v1/capture-sources/%s/files", pathParam0)
+	if operationPath[0] == '/' {
+		operationPath = "." + operationPath
+	}
+
+	queryURL, err := serverURL.Parse(operationPath)
+	if err != nil {
+		return nil, err
+	}
+
+	if params != nil {
+		// queryValues collects non-styled parameters (passthrough, JSON)
+		// that are safe to round-trip through url.Values.Encode().
+		queryValues := queryURL.Query()
+		// rawQueryFragments collects pre-encoded query fragments from
+		// styled parameters, preserving literal commas as delimiters
+		// per the OpenAPI spec (e.g. "color=blue,black,brown").
+		var rawQueryFragments []string
+
+		if params.Limit != nil {
+
+			if queryFrag, err := runtime.StyleParamWithOptions("form", true, "limit", *params.Limit, runtime.StyleParamOptions{ParamLocation: runtime.ParamLocationQuery, Type: "integer", Format: "int32"}); err != nil {
+				return nil, err
+			} else {
+				for _, qp := range strings.Split(queryFrag, "&") {
+					rawQueryFragments = append(rawQueryFragments, qp)
+				}
+			}
+
+		}
+
+		if encoded := queryValues.Encode(); encoded != "" {
+			rawQueryFragments = append(rawQueryFragments, encoded)
+		}
+		queryURL.RawQuery = strings.Join(rawQueryFragments, "&")
+	}
+
+	req, err := http.NewRequest(http.MethodGet, queryURL.String(), nil)
+	if err != nil {
+		return nil, err
+	}
+
+	return req, nil
+}
+
 // NewAnalyseRequestWithBody generates requests for Analyse with any type of body
 func NewAnalyseRequestWithBody(server string, contentType string, body io.Reader) (*http.Request, error) {
 	var err error
@@ -1219,6 +1847,46 @@ func NewAnalyseRequestWithBody(server string, contentType string, body io.Reader
 	}
 
 	operationPath := fmt.Sprintf("/api/v1/captures/analyse")
+	if operationPath[0] == '/' {
+		operationPath = "." + operationPath
+	}
+
+	queryURL, err := serverURL.Parse(operationPath)
+	if err != nil {
+		return nil, err
+	}
+
+	req, err := http.NewRequest(http.MethodPost, queryURL.String(), body)
+	if err != nil {
+		return nil, err
+	}
+
+	req.Header.Add("Content-Type", contentType)
+
+	return req, nil
+}
+
+// NewAnalyseRemoteCaptureRequest calls the generic AnalyseRemoteCapture builder with application/json body
+func NewAnalyseRemoteCaptureRequest(server string, body AnalyseRemoteCaptureJSONRequestBody) (*http.Request, error) {
+	var bodyReader io.Reader
+	buf, err := json.Marshal(body)
+	if err != nil {
+		return nil, err
+	}
+	bodyReader = bytes.NewReader(buf)
+	return NewAnalyseRemoteCaptureRequestWithBody(server, "application/json", bodyReader)
+}
+
+// NewAnalyseRemoteCaptureRequestWithBody generates requests for AnalyseRemoteCapture with any type of body
+func NewAnalyseRemoteCaptureRequestWithBody(server string, contentType string, body io.Reader) (*http.Request, error) {
+	var err error
+
+	serverURL, err := url.Parse(server)
+	if err != nil {
+		return nil, err
+	}
+
+	operationPath := fmt.Sprintf("/api/v1/captures/analyse-remote")
 	if operationPath[0] == '/' {
 		operationPath = "." + operationPath
 	}
@@ -1278,6 +1946,46 @@ func NewImportCaptureRequestWithBody(server string, params *ImportCaptureParams,
 			rawQueryFragments = append(rawQueryFragments, encoded)
 		}
 		queryURL.RawQuery = strings.Join(rawQueryFragments, "&")
+	}
+
+	req, err := http.NewRequest(http.MethodPost, queryURL.String(), body)
+	if err != nil {
+		return nil, err
+	}
+
+	req.Header.Add("Content-Type", contentType)
+
+	return req, nil
+}
+
+// NewImportRemoteCaptureRequest calls the generic ImportRemoteCapture builder with application/json body
+func NewImportRemoteCaptureRequest(server string, body ImportRemoteCaptureJSONRequestBody) (*http.Request, error) {
+	var bodyReader io.Reader
+	buf, err := json.Marshal(body)
+	if err != nil {
+		return nil, err
+	}
+	bodyReader = bytes.NewReader(buf)
+	return NewImportRemoteCaptureRequestWithBody(server, "application/json", bodyReader)
+}
+
+// NewImportRemoteCaptureRequestWithBody generates requests for ImportRemoteCapture with any type of body
+func NewImportRemoteCaptureRequestWithBody(server string, contentType string, body io.Reader) (*http.Request, error) {
+	var err error
+
+	serverURL, err := url.Parse(server)
+	if err != nil {
+		return nil, err
+	}
+
+	operationPath := fmt.Sprintf("/api/v1/captures/import-remote")
+	if operationPath[0] == '/' {
+		operationPath = "." + operationPath
+	}
+
+	queryURL, err := serverURL.Parse(operationPath)
+	if err != nil {
+		return nil, err
 	}
 
 	req, err := http.NewRequest(http.MethodPost, queryURL.String(), body)
@@ -1667,6 +2375,67 @@ func NewCompareRunsRequest(server string, params *CompareRunsParams) (*http.Requ
 	return req, nil
 }
 
+// NewListHistoryFiltersRequest generates requests for ListHistoryFilters
+func NewListHistoryFiltersRequest(server string) (*http.Request, error) {
+	var err error
+
+	serverURL, err := url.Parse(server)
+	if err != nil {
+		return nil, err
+	}
+
+	operationPath := fmt.Sprintf("/api/v1/history/filters")
+	if operationPath[0] == '/' {
+		operationPath = "." + operationPath
+	}
+
+	queryURL, err := serverURL.Parse(operationPath)
+	if err != nil {
+		return nil, err
+	}
+
+	req, err := http.NewRequest(http.MethodGet, queryURL.String(), nil)
+	if err != nil {
+		return nil, err
+	}
+
+	return req, nil
+}
+
+// NewDeleteRunRequest generates requests for DeleteRun
+func NewDeleteRunRequest(server string, id int64) (*http.Request, error) {
+	var err error
+
+	var pathParam0 string
+
+	pathParam0, err = runtime.StyleParamWithOptions("simple", false, "id", id, runtime.StyleParamOptions{ParamLocation: runtime.ParamLocationPath, Type: "integer", Format: "int64"})
+	if err != nil {
+		return nil, err
+	}
+
+	serverURL, err := url.Parse(server)
+	if err != nil {
+		return nil, err
+	}
+
+	operationPath := fmt.Sprintf("/api/v1/history/%s", pathParam0)
+	if operationPath[0] == '/' {
+		operationPath = "." + operationPath
+	}
+
+	queryURL, err := serverURL.Parse(operationPath)
+	if err != nil {
+		return nil, err
+	}
+
+	req, err := http.NewRequest(http.MethodDelete, queryURL.String(), nil)
+	if err != nil {
+		return nil, err
+	}
+
+	return req, nil
+}
+
 // NewGetHistoryItemRequest generates requests for GetHistoryItem
 func NewGetHistoryItemRequest(server string, id int64) (*http.Request, error) {
 	var err error
@@ -1749,6 +2518,46 @@ func NewCreateProfileRequestWithBody(server string, contentType string, body io.
 	}
 
 	operationPath := fmt.Sprintf("/api/v1/profiles")
+	if operationPath[0] == '/' {
+		operationPath = "." + operationPath
+	}
+
+	queryURL, err := serverURL.Parse(operationPath)
+	if err != nil {
+		return nil, err
+	}
+
+	req, err := http.NewRequest(http.MethodPost, queryURL.String(), body)
+	if err != nil {
+		return nil, err
+	}
+
+	req.Header.Add("Content-Type", contentType)
+
+	return req, nil
+}
+
+// NewImportProfileRequest calls the generic ImportProfile builder with application/json body
+func NewImportProfileRequest(server string, body ImportProfileJSONRequestBody) (*http.Request, error) {
+	var bodyReader io.Reader
+	buf, err := json.Marshal(body)
+	if err != nil {
+		return nil, err
+	}
+	bodyReader = bytes.NewReader(buf)
+	return NewImportProfileRequestWithBody(server, "application/json", bodyReader)
+}
+
+// NewImportProfileRequestWithBody generates requests for ImportProfile with any type of body
+func NewImportProfileRequestWithBody(server string, contentType string, body io.Reader) (*http.Request, error) {
+	var err error
+
+	serverURL, err := url.Parse(server)
+	if err != nil {
+		return nil, err
+	}
+
+	operationPath := fmt.Sprintf("/api/v1/profiles/import")
 	if operationPath[0] == '/' {
 		operationPath = "." + operationPath
 	}
@@ -1883,6 +2692,40 @@ func NewUpdateProfileRequestWithBody(server string, id int64, contentType string
 	return req, nil
 }
 
+// NewExportProfileRequest generates requests for ExportProfile
+func NewExportProfileRequest(server string, id int64) (*http.Request, error) {
+	var err error
+
+	var pathParam0 string
+
+	pathParam0, err = runtime.StyleParamWithOptions("simple", false, "id", id, runtime.StyleParamOptions{ParamLocation: runtime.ParamLocationPath, Type: "integer", Format: "int64"})
+	if err != nil {
+		return nil, err
+	}
+
+	serverURL, err := url.Parse(server)
+	if err != nil {
+		return nil, err
+	}
+
+	operationPath := fmt.Sprintf("/api/v1/profiles/%s/export", pathParam0)
+	if operationPath[0] == '/' {
+		operationPath = "." + operationPath
+	}
+
+	queryURL, err := serverURL.Parse(operationPath)
+	if err != nil {
+		return nil, err
+	}
+
+	req, err := http.NewRequest(http.MethodGet, queryURL.String(), nil)
+	if err != nil {
+		return nil, err
+	}
+
+	return req, nil
+}
+
 // NewPauseRequest generates requests for Pause
 func NewPauseRequest(server string, id int64) (*http.Request, error) {
 	var err error
@@ -1994,6 +2837,40 @@ func NewStartRunRequestWithBody(server string, id int64, contentType string, bod
 	}
 
 	req.Header.Add("Content-Type", contentType)
+
+	return req, nil
+}
+
+// NewDeleteScheduleRequest generates requests for DeleteSchedule
+func NewDeleteScheduleRequest(server string, id int64) (*http.Request, error) {
+	var err error
+
+	var pathParam0 string
+
+	pathParam0, err = runtime.StyleParamWithOptions("simple", false, "id", id, runtime.StyleParamOptions{ParamLocation: runtime.ParamLocationPath, Type: "integer", Format: "int64"})
+	if err != nil {
+		return nil, err
+	}
+
+	serverURL, err := url.Parse(server)
+	if err != nil {
+		return nil, err
+	}
+
+	operationPath := fmt.Sprintf("/api/v1/profiles/%s/schedule", pathParam0)
+	if operationPath[0] == '/' {
+		operationPath = "." + operationPath
+	}
+
+	queryURL, err := serverURL.Parse(operationPath)
+	if err != nil {
+		return nil, err
+	}
+
+	req, err := http.NewRequest(http.MethodDelete, queryURL.String(), nil)
+	if err != nil {
+		return nil, err
+	}
 
 	return req, nil
 }
@@ -2399,11 +3276,30 @@ func WithBaseURL(baseURL string) ClientOption {
 
 // ClientWithResponsesInterface is the interface specification for the client with responses above.
 type ClientWithResponsesInterface interface {
+	// GetAccountWithResponse request
+	GetAccountWithResponse(ctx context.Context, reqEditors ...RequestEditorFn) (*GetAccountResponse, error)
+
+	// ListCaptureSourcesWithResponse request
+	ListCaptureSourcesWithResponse(ctx context.Context, reqEditors ...RequestEditorFn) (*ListCaptureSourcesResponse, error)
+
+	// ListCaptureSourceFilesWithResponse request
+	ListCaptureSourceFilesWithResponse(ctx context.Context, id int64, params *ListCaptureSourceFilesParams, reqEditors ...RequestEditorFn) (*ListCaptureSourceFilesResponse, error)
+
 	// AnalyseWithBodyWithResponse request with any body
 	AnalyseWithBodyWithResponse(ctx context.Context, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*AnalyseResponse, error)
 
+	// AnalyseRemoteCaptureWithBodyWithResponse request with any body
+	AnalyseRemoteCaptureWithBodyWithResponse(ctx context.Context, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*AnalyseRemoteCaptureResponse, error)
+
+	AnalyseRemoteCaptureWithResponse(ctx context.Context, body AnalyseRemoteCaptureJSONRequestBody, reqEditors ...RequestEditorFn) (*AnalyseRemoteCaptureResponse, error)
+
 	// ImportCaptureWithBodyWithResponse request with any body
 	ImportCaptureWithBodyWithResponse(ctx context.Context, params *ImportCaptureParams, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*ImportCaptureResponse, error)
+
+	// ImportRemoteCaptureWithBodyWithResponse request with any body
+	ImportRemoteCaptureWithBodyWithResponse(ctx context.Context, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*ImportRemoteCaptureResponse, error)
+
+	ImportRemoteCaptureWithResponse(ctx context.Context, body ImportRemoteCaptureJSONRequestBody, reqEditors ...RequestEditorFn) (*ImportRemoteCaptureResponse, error)
 
 	// ListDomainsWithResponse request
 	ListDomainsWithResponse(ctx context.Context, reqEditors ...RequestEditorFn) (*ListDomainsResponse, error)
@@ -2428,6 +3324,12 @@ type ClientWithResponsesInterface interface {
 	// CompareRunsWithResponse request
 	CompareRunsWithResponse(ctx context.Context, params *CompareRunsParams, reqEditors ...RequestEditorFn) (*CompareRunsResponse, error)
 
+	// ListHistoryFiltersWithResponse request
+	ListHistoryFiltersWithResponse(ctx context.Context, reqEditors ...RequestEditorFn) (*ListHistoryFiltersResponse, error)
+
+	// DeleteRunWithResponse request
+	DeleteRunWithResponse(ctx context.Context, id int64, reqEditors ...RequestEditorFn) (*DeleteRunResponse, error)
+
 	// GetHistoryItemWithResponse request
 	GetHistoryItemWithResponse(ctx context.Context, id int64, reqEditors ...RequestEditorFn) (*GetHistoryItemResponse, error)
 
@@ -2438,6 +3340,11 @@ type ClientWithResponsesInterface interface {
 	CreateProfileWithBodyWithResponse(ctx context.Context, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*CreateProfileResponse, error)
 
 	CreateProfileWithResponse(ctx context.Context, body CreateProfileJSONRequestBody, reqEditors ...RequestEditorFn) (*CreateProfileResponse, error)
+
+	// ImportProfileWithBodyWithResponse request with any body
+	ImportProfileWithBodyWithResponse(ctx context.Context, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*ImportProfileResponse, error)
+
+	ImportProfileWithResponse(ctx context.Context, body ImportProfileJSONRequestBody, reqEditors ...RequestEditorFn) (*ImportProfileResponse, error)
 
 	// DeleteProfileWithResponse request
 	DeleteProfileWithResponse(ctx context.Context, id int64, reqEditors ...RequestEditorFn) (*DeleteProfileResponse, error)
@@ -2450,6 +3357,9 @@ type ClientWithResponsesInterface interface {
 
 	UpdateProfileWithResponse(ctx context.Context, id int64, body UpdateProfileJSONRequestBody, reqEditors ...RequestEditorFn) (*UpdateProfileResponse, error)
 
+	// ExportProfileWithResponse request
+	ExportProfileWithResponse(ctx context.Context, id int64, reqEditors ...RequestEditorFn) (*ExportProfileResponse, error)
+
 	// PauseWithResponse request
 	PauseWithResponse(ctx context.Context, id int64, reqEditors ...RequestEditorFn) (*PauseResponse, error)
 
@@ -2460,6 +3370,9 @@ type ClientWithResponsesInterface interface {
 	StartRunWithBodyWithResponse(ctx context.Context, id int64, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*StartRunResponse, error)
 
 	StartRunWithResponse(ctx context.Context, id int64, body StartRunJSONRequestBody, reqEditors ...RequestEditorFn) (*StartRunResponse, error)
+
+	// DeleteScheduleWithResponse request
+	DeleteScheduleWithResponse(ctx context.Context, id int64, reqEditors ...RequestEditorFn) (*DeleteScheduleResponse, error)
 
 	// StartWithResponse request
 	StartWithResponse(ctx context.Context, id int64, reqEditors ...RequestEditorFn) (*StartResponse, error)
@@ -2498,6 +3411,93 @@ type ClientWithResponsesInterface interface {
 	ChangeModeWithResponse(ctx context.Context, id int64, body ChangeModeJSONRequestBody, reqEditors ...RequestEditorFn) (*ChangeModeResponse, error)
 }
 
+type GetAccountResponse struct {
+	Body         []byte
+	HTTPResponse *http.Response
+}
+
+// Status returns HTTPResponse.Status
+func (r GetAccountResponse) Status() string {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.Status
+	}
+	return http.StatusText(0)
+}
+
+// StatusCode returns HTTPResponse.StatusCode
+func (r GetAccountResponse) StatusCode() int {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.StatusCode
+	}
+	return 0
+}
+
+// ContentType is a convenience method to retrieve the Content-Type value from the HTTP response headers
+func (r GetAccountResponse) ContentType() string {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.Header.Get("Content-Type")
+	}
+	return ""
+}
+
+type ListCaptureSourcesResponse struct {
+	Body         []byte
+	HTTPResponse *http.Response
+}
+
+// Status returns HTTPResponse.Status
+func (r ListCaptureSourcesResponse) Status() string {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.Status
+	}
+	return http.StatusText(0)
+}
+
+// StatusCode returns HTTPResponse.StatusCode
+func (r ListCaptureSourcesResponse) StatusCode() int {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.StatusCode
+	}
+	return 0
+}
+
+// ContentType is a convenience method to retrieve the Content-Type value from the HTTP response headers
+func (r ListCaptureSourcesResponse) ContentType() string {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.Header.Get("Content-Type")
+	}
+	return ""
+}
+
+type ListCaptureSourceFilesResponse struct {
+	Body         []byte
+	HTTPResponse *http.Response
+}
+
+// Status returns HTTPResponse.Status
+func (r ListCaptureSourceFilesResponse) Status() string {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.Status
+	}
+	return http.StatusText(0)
+}
+
+// StatusCode returns HTTPResponse.StatusCode
+func (r ListCaptureSourceFilesResponse) StatusCode() int {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.StatusCode
+	}
+	return 0
+}
+
+// ContentType is a convenience method to retrieve the Content-Type value from the HTTP response headers
+func (r ListCaptureSourceFilesResponse) ContentType() string {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.Header.Get("Content-Type")
+	}
+	return ""
+}
+
 type AnalyseResponse struct {
 	Body         []byte
 	HTTPResponse *http.Response
@@ -2527,6 +3527,35 @@ func (r AnalyseResponse) ContentType() string {
 	return ""
 }
 
+type AnalyseRemoteCaptureResponse struct {
+	Body         []byte
+	HTTPResponse *http.Response
+}
+
+// Status returns HTTPResponse.Status
+func (r AnalyseRemoteCaptureResponse) Status() string {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.Status
+	}
+	return http.StatusText(0)
+}
+
+// StatusCode returns HTTPResponse.StatusCode
+func (r AnalyseRemoteCaptureResponse) StatusCode() int {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.StatusCode
+	}
+	return 0
+}
+
+// ContentType is a convenience method to retrieve the Content-Type value from the HTTP response headers
+func (r AnalyseRemoteCaptureResponse) ContentType() string {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.Header.Get("Content-Type")
+	}
+	return ""
+}
+
 type ImportCaptureResponse struct {
 	Body         []byte
 	HTTPResponse *http.Response
@@ -2550,6 +3579,35 @@ func (r ImportCaptureResponse) StatusCode() int {
 
 // ContentType is a convenience method to retrieve the Content-Type value from the HTTP response headers
 func (r ImportCaptureResponse) ContentType() string {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.Header.Get("Content-Type")
+	}
+	return ""
+}
+
+type ImportRemoteCaptureResponse struct {
+	Body         []byte
+	HTTPResponse *http.Response
+}
+
+// Status returns HTTPResponse.Status
+func (r ImportRemoteCaptureResponse) Status() string {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.Status
+	}
+	return http.StatusText(0)
+}
+
+// StatusCode returns HTTPResponse.StatusCode
+func (r ImportRemoteCaptureResponse) StatusCode() int {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.StatusCode
+	}
+	return 0
+}
+
+// ContentType is a convenience method to retrieve the Content-Type value from the HTTP response headers
+func (r ImportRemoteCaptureResponse) ContentType() string {
 	if r.HTTPResponse != nil {
 		return r.HTTPResponse.Header.Get("Content-Type")
 	}
@@ -2759,6 +3817,64 @@ func (r CompareRunsResponse) ContentType() string {
 	return ""
 }
 
+type ListHistoryFiltersResponse struct {
+	Body         []byte
+	HTTPResponse *http.Response
+}
+
+// Status returns HTTPResponse.Status
+func (r ListHistoryFiltersResponse) Status() string {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.Status
+	}
+	return http.StatusText(0)
+}
+
+// StatusCode returns HTTPResponse.StatusCode
+func (r ListHistoryFiltersResponse) StatusCode() int {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.StatusCode
+	}
+	return 0
+}
+
+// ContentType is a convenience method to retrieve the Content-Type value from the HTTP response headers
+func (r ListHistoryFiltersResponse) ContentType() string {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.Header.Get("Content-Type")
+	}
+	return ""
+}
+
+type DeleteRunResponse struct {
+	Body         []byte
+	HTTPResponse *http.Response
+}
+
+// Status returns HTTPResponse.Status
+func (r DeleteRunResponse) Status() string {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.Status
+	}
+	return http.StatusText(0)
+}
+
+// StatusCode returns HTTPResponse.StatusCode
+func (r DeleteRunResponse) StatusCode() int {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.StatusCode
+	}
+	return 0
+}
+
+// ContentType is a convenience method to retrieve the Content-Type value from the HTTP response headers
+func (r DeleteRunResponse) ContentType() string {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.Header.Get("Content-Type")
+	}
+	return ""
+}
+
 type GetHistoryItemResponse struct {
 	Body         []byte
 	HTTPResponse *http.Response
@@ -2840,6 +3956,35 @@ func (r CreateProfileResponse) StatusCode() int {
 
 // ContentType is a convenience method to retrieve the Content-Type value from the HTTP response headers
 func (r CreateProfileResponse) ContentType() string {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.Header.Get("Content-Type")
+	}
+	return ""
+}
+
+type ImportProfileResponse struct {
+	Body         []byte
+	HTTPResponse *http.Response
+}
+
+// Status returns HTTPResponse.Status
+func (r ImportProfileResponse) Status() string {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.Status
+	}
+	return http.StatusText(0)
+}
+
+// StatusCode returns HTTPResponse.StatusCode
+func (r ImportProfileResponse) StatusCode() int {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.StatusCode
+	}
+	return 0
+}
+
+// ContentType is a convenience method to retrieve the Content-Type value from the HTTP response headers
+func (r ImportProfileResponse) ContentType() string {
 	if r.HTTPResponse != nil {
 		return r.HTTPResponse.Header.Get("Content-Type")
 	}
@@ -2933,6 +4078,36 @@ func (r UpdateProfileResponse) ContentType() string {
 	return ""
 }
 
+type ExportProfileResponse struct {
+	Body         []byte
+	HTTPResponse *http.Response
+	JSON200      *map[string]interface{}
+}
+
+// Status returns HTTPResponse.Status
+func (r ExportProfileResponse) Status() string {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.Status
+	}
+	return http.StatusText(0)
+}
+
+// StatusCode returns HTTPResponse.StatusCode
+func (r ExportProfileResponse) StatusCode() int {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.StatusCode
+	}
+	return 0
+}
+
+// ContentType is a convenience method to retrieve the Content-Type value from the HTTP response headers
+func (r ExportProfileResponse) ContentType() string {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.Header.Get("Content-Type")
+	}
+	return ""
+}
+
 type PauseResponse struct {
 	Body         []byte
 	HTTPResponse *http.Response
@@ -3014,6 +4189,35 @@ func (r StartRunResponse) StatusCode() int {
 
 // ContentType is a convenience method to retrieve the Content-Type value from the HTTP response headers
 func (r StartRunResponse) ContentType() string {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.Header.Get("Content-Type")
+	}
+	return ""
+}
+
+type DeleteScheduleResponse struct {
+	Body         []byte
+	HTTPResponse *http.Response
+}
+
+// Status returns HTTPResponse.Status
+func (r DeleteScheduleResponse) Status() string {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.Status
+	}
+	return http.StatusText(0)
+}
+
+// StatusCode returns HTTPResponse.StatusCode
+func (r DeleteScheduleResponse) StatusCode() int {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.StatusCode
+	}
+	return 0
+}
+
+// ContentType is a convenience method to retrieve the Content-Type value from the HTTP response headers
+func (r DeleteScheduleResponse) ContentType() string {
 	if r.HTTPResponse != nil {
 		return r.HTTPResponse.Header.Get("Content-Type")
 	}
@@ -3310,6 +4514,33 @@ func (r ChangeModeResponse) ContentType() string {
 	return ""
 }
 
+// GetAccountWithResponse request returning *GetAccountResponse
+func (c *ClientWithResponses) GetAccountWithResponse(ctx context.Context, reqEditors ...RequestEditorFn) (*GetAccountResponse, error) {
+	rsp, err := c.GetAccount(ctx, reqEditors...)
+	if err != nil {
+		return nil, err
+	}
+	return ParseGetAccountResponse(rsp)
+}
+
+// ListCaptureSourcesWithResponse request returning *ListCaptureSourcesResponse
+func (c *ClientWithResponses) ListCaptureSourcesWithResponse(ctx context.Context, reqEditors ...RequestEditorFn) (*ListCaptureSourcesResponse, error) {
+	rsp, err := c.ListCaptureSources(ctx, reqEditors...)
+	if err != nil {
+		return nil, err
+	}
+	return ParseListCaptureSourcesResponse(rsp)
+}
+
+// ListCaptureSourceFilesWithResponse request returning *ListCaptureSourceFilesResponse
+func (c *ClientWithResponses) ListCaptureSourceFilesWithResponse(ctx context.Context, id int64, params *ListCaptureSourceFilesParams, reqEditors ...RequestEditorFn) (*ListCaptureSourceFilesResponse, error) {
+	rsp, err := c.ListCaptureSourceFiles(ctx, id, params, reqEditors...)
+	if err != nil {
+		return nil, err
+	}
+	return ParseListCaptureSourceFilesResponse(rsp)
+}
+
 // AnalyseWithBodyWithResponse request with arbitrary body returning *AnalyseResponse
 func (c *ClientWithResponses) AnalyseWithBodyWithResponse(ctx context.Context, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*AnalyseResponse, error) {
 	rsp, err := c.AnalyseWithBody(ctx, contentType, body, reqEditors...)
@@ -3319,6 +4550,23 @@ func (c *ClientWithResponses) AnalyseWithBodyWithResponse(ctx context.Context, c
 	return ParseAnalyseResponse(rsp)
 }
 
+// AnalyseRemoteCaptureWithBodyWithResponse request with arbitrary body returning *AnalyseRemoteCaptureResponse
+func (c *ClientWithResponses) AnalyseRemoteCaptureWithBodyWithResponse(ctx context.Context, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*AnalyseRemoteCaptureResponse, error) {
+	rsp, err := c.AnalyseRemoteCaptureWithBody(ctx, contentType, body, reqEditors...)
+	if err != nil {
+		return nil, err
+	}
+	return ParseAnalyseRemoteCaptureResponse(rsp)
+}
+
+func (c *ClientWithResponses) AnalyseRemoteCaptureWithResponse(ctx context.Context, body AnalyseRemoteCaptureJSONRequestBody, reqEditors ...RequestEditorFn) (*AnalyseRemoteCaptureResponse, error) {
+	rsp, err := c.AnalyseRemoteCapture(ctx, body, reqEditors...)
+	if err != nil {
+		return nil, err
+	}
+	return ParseAnalyseRemoteCaptureResponse(rsp)
+}
+
 // ImportCaptureWithBodyWithResponse request with arbitrary body returning *ImportCaptureResponse
 func (c *ClientWithResponses) ImportCaptureWithBodyWithResponse(ctx context.Context, params *ImportCaptureParams, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*ImportCaptureResponse, error) {
 	rsp, err := c.ImportCaptureWithBody(ctx, params, contentType, body, reqEditors...)
@@ -3326,6 +4574,23 @@ func (c *ClientWithResponses) ImportCaptureWithBodyWithResponse(ctx context.Cont
 		return nil, err
 	}
 	return ParseImportCaptureResponse(rsp)
+}
+
+// ImportRemoteCaptureWithBodyWithResponse request with arbitrary body returning *ImportRemoteCaptureResponse
+func (c *ClientWithResponses) ImportRemoteCaptureWithBodyWithResponse(ctx context.Context, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*ImportRemoteCaptureResponse, error) {
+	rsp, err := c.ImportRemoteCaptureWithBody(ctx, contentType, body, reqEditors...)
+	if err != nil {
+		return nil, err
+	}
+	return ParseImportRemoteCaptureResponse(rsp)
+}
+
+func (c *ClientWithResponses) ImportRemoteCaptureWithResponse(ctx context.Context, body ImportRemoteCaptureJSONRequestBody, reqEditors ...RequestEditorFn) (*ImportRemoteCaptureResponse, error) {
+	rsp, err := c.ImportRemoteCapture(ctx, body, reqEditors...)
+	if err != nil {
+		return nil, err
+	}
+	return ParseImportRemoteCaptureResponse(rsp)
 }
 
 // ListDomainsWithResponse request returning *ListDomainsResponse
@@ -3399,6 +4664,24 @@ func (c *ClientWithResponses) CompareRunsWithResponse(ctx context.Context, param
 	return ParseCompareRunsResponse(rsp)
 }
 
+// ListHistoryFiltersWithResponse request returning *ListHistoryFiltersResponse
+func (c *ClientWithResponses) ListHistoryFiltersWithResponse(ctx context.Context, reqEditors ...RequestEditorFn) (*ListHistoryFiltersResponse, error) {
+	rsp, err := c.ListHistoryFilters(ctx, reqEditors...)
+	if err != nil {
+		return nil, err
+	}
+	return ParseListHistoryFiltersResponse(rsp)
+}
+
+// DeleteRunWithResponse request returning *DeleteRunResponse
+func (c *ClientWithResponses) DeleteRunWithResponse(ctx context.Context, id int64, reqEditors ...RequestEditorFn) (*DeleteRunResponse, error) {
+	rsp, err := c.DeleteRun(ctx, id, reqEditors...)
+	if err != nil {
+		return nil, err
+	}
+	return ParseDeleteRunResponse(rsp)
+}
+
 // GetHistoryItemWithResponse request returning *GetHistoryItemResponse
 func (c *ClientWithResponses) GetHistoryItemWithResponse(ctx context.Context, id int64, reqEditors ...RequestEditorFn) (*GetHistoryItemResponse, error) {
 	rsp, err := c.GetHistoryItem(ctx, id, reqEditors...)
@@ -3432,6 +4715,23 @@ func (c *ClientWithResponses) CreateProfileWithResponse(ctx context.Context, bod
 		return nil, err
 	}
 	return ParseCreateProfileResponse(rsp)
+}
+
+// ImportProfileWithBodyWithResponse request with arbitrary body returning *ImportProfileResponse
+func (c *ClientWithResponses) ImportProfileWithBodyWithResponse(ctx context.Context, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*ImportProfileResponse, error) {
+	rsp, err := c.ImportProfileWithBody(ctx, contentType, body, reqEditors...)
+	if err != nil {
+		return nil, err
+	}
+	return ParseImportProfileResponse(rsp)
+}
+
+func (c *ClientWithResponses) ImportProfileWithResponse(ctx context.Context, body ImportProfileJSONRequestBody, reqEditors ...RequestEditorFn) (*ImportProfileResponse, error) {
+	rsp, err := c.ImportProfile(ctx, body, reqEditors...)
+	if err != nil {
+		return nil, err
+	}
+	return ParseImportProfileResponse(rsp)
 }
 
 // DeleteProfileWithResponse request returning *DeleteProfileResponse
@@ -3469,6 +4769,15 @@ func (c *ClientWithResponses) UpdateProfileWithResponse(ctx context.Context, id 
 	return ParseUpdateProfileResponse(rsp)
 }
 
+// ExportProfileWithResponse request returning *ExportProfileResponse
+func (c *ClientWithResponses) ExportProfileWithResponse(ctx context.Context, id int64, reqEditors ...RequestEditorFn) (*ExportProfileResponse, error) {
+	rsp, err := c.ExportProfile(ctx, id, reqEditors...)
+	if err != nil {
+		return nil, err
+	}
+	return ParseExportProfileResponse(rsp)
+}
+
 // PauseWithResponse request returning *PauseResponse
 func (c *ClientWithResponses) PauseWithResponse(ctx context.Context, id int64, reqEditors ...RequestEditorFn) (*PauseResponse, error) {
 	rsp, err := c.Pause(ctx, id, reqEditors...)
@@ -3502,6 +4811,15 @@ func (c *ClientWithResponses) StartRunWithResponse(ctx context.Context, id int64
 		return nil, err
 	}
 	return ParseStartRunResponse(rsp)
+}
+
+// DeleteScheduleWithResponse request returning *DeleteScheduleResponse
+func (c *ClientWithResponses) DeleteScheduleWithResponse(ctx context.Context, id int64, reqEditors ...RequestEditorFn) (*DeleteScheduleResponse, error) {
+	rsp, err := c.DeleteSchedule(ctx, id, reqEditors...)
+	if err != nil {
+		return nil, err
+	}
+	return ParseDeleteScheduleResponse(rsp)
 }
 
 // StartWithResponse request returning *StartResponse
@@ -3618,6 +4936,54 @@ func (c *ClientWithResponses) ChangeModeWithResponse(ctx context.Context, id int
 	return ParseChangeModeResponse(rsp)
 }
 
+// ParseGetAccountResponse parses an HTTP response from a GetAccountWithResponse call
+func ParseGetAccountResponse(rsp *http.Response) (*GetAccountResponse, error) {
+	bodyBytes, err := io.ReadAll(rsp.Body)
+	defer func() { _ = rsp.Body.Close() }()
+	if err != nil {
+		return nil, err
+	}
+
+	response := &GetAccountResponse{
+		Body:         bodyBytes,
+		HTTPResponse: rsp,
+	}
+
+	return response, nil
+}
+
+// ParseListCaptureSourcesResponse parses an HTTP response from a ListCaptureSourcesWithResponse call
+func ParseListCaptureSourcesResponse(rsp *http.Response) (*ListCaptureSourcesResponse, error) {
+	bodyBytes, err := io.ReadAll(rsp.Body)
+	defer func() { _ = rsp.Body.Close() }()
+	if err != nil {
+		return nil, err
+	}
+
+	response := &ListCaptureSourcesResponse{
+		Body:         bodyBytes,
+		HTTPResponse: rsp,
+	}
+
+	return response, nil
+}
+
+// ParseListCaptureSourceFilesResponse parses an HTTP response from a ListCaptureSourceFilesWithResponse call
+func ParseListCaptureSourceFilesResponse(rsp *http.Response) (*ListCaptureSourceFilesResponse, error) {
+	bodyBytes, err := io.ReadAll(rsp.Body)
+	defer func() { _ = rsp.Body.Close() }()
+	if err != nil {
+		return nil, err
+	}
+
+	response := &ListCaptureSourceFilesResponse{
+		Body:         bodyBytes,
+		HTTPResponse: rsp,
+	}
+
+	return response, nil
+}
+
 // ParseAnalyseResponse parses an HTTP response from a AnalyseWithResponse call
 func ParseAnalyseResponse(rsp *http.Response) (*AnalyseResponse, error) {
 	bodyBytes, err := io.ReadAll(rsp.Body)
@@ -3634,6 +5000,22 @@ func ParseAnalyseResponse(rsp *http.Response) (*AnalyseResponse, error) {
 	return response, nil
 }
 
+// ParseAnalyseRemoteCaptureResponse parses an HTTP response from a AnalyseRemoteCaptureWithResponse call
+func ParseAnalyseRemoteCaptureResponse(rsp *http.Response) (*AnalyseRemoteCaptureResponse, error) {
+	bodyBytes, err := io.ReadAll(rsp.Body)
+	defer func() { _ = rsp.Body.Close() }()
+	if err != nil {
+		return nil, err
+	}
+
+	response := &AnalyseRemoteCaptureResponse{
+		Body:         bodyBytes,
+		HTTPResponse: rsp,
+	}
+
+	return response, nil
+}
+
 // ParseImportCaptureResponse parses an HTTP response from a ImportCaptureWithResponse call
 func ParseImportCaptureResponse(rsp *http.Response) (*ImportCaptureResponse, error) {
 	bodyBytes, err := io.ReadAll(rsp.Body)
@@ -3643,6 +5025,22 @@ func ParseImportCaptureResponse(rsp *http.Response) (*ImportCaptureResponse, err
 	}
 
 	response := &ImportCaptureResponse{
+		Body:         bodyBytes,
+		HTTPResponse: rsp,
+	}
+
+	return response, nil
+}
+
+// ParseImportRemoteCaptureResponse parses an HTTP response from a ImportRemoteCaptureWithResponse call
+func ParseImportRemoteCaptureResponse(rsp *http.Response) (*ImportRemoteCaptureResponse, error) {
+	bodyBytes, err := io.ReadAll(rsp.Body)
+	defer func() { _ = rsp.Body.Close() }()
+	if err != nil {
+		return nil, err
+	}
+
+	response := &ImportRemoteCaptureResponse{
 		Body:         bodyBytes,
 		HTTPResponse: rsp,
 	}
@@ -3762,6 +5160,38 @@ func ParseCompareRunsResponse(rsp *http.Response) (*CompareRunsResponse, error) 
 	return response, nil
 }
 
+// ParseListHistoryFiltersResponse parses an HTTP response from a ListHistoryFiltersWithResponse call
+func ParseListHistoryFiltersResponse(rsp *http.Response) (*ListHistoryFiltersResponse, error) {
+	bodyBytes, err := io.ReadAll(rsp.Body)
+	defer func() { _ = rsp.Body.Close() }()
+	if err != nil {
+		return nil, err
+	}
+
+	response := &ListHistoryFiltersResponse{
+		Body:         bodyBytes,
+		HTTPResponse: rsp,
+	}
+
+	return response, nil
+}
+
+// ParseDeleteRunResponse parses an HTTP response from a DeleteRunWithResponse call
+func ParseDeleteRunResponse(rsp *http.Response) (*DeleteRunResponse, error) {
+	bodyBytes, err := io.ReadAll(rsp.Body)
+	defer func() { _ = rsp.Body.Close() }()
+	if err != nil {
+		return nil, err
+	}
+
+	response := &DeleteRunResponse{
+		Body:         bodyBytes,
+		HTTPResponse: rsp,
+	}
+
+	return response, nil
+}
+
 // ParseGetHistoryItemResponse parses an HTTP response from a GetHistoryItemWithResponse call
 func ParseGetHistoryItemResponse(rsp *http.Response) (*GetHistoryItemResponse, error) {
 	bodyBytes, err := io.ReadAll(rsp.Body)
@@ -3803,6 +5233,22 @@ func ParseCreateProfileResponse(rsp *http.Response) (*CreateProfileResponse, err
 	}
 
 	response := &CreateProfileResponse{
+		Body:         bodyBytes,
+		HTTPResponse: rsp,
+	}
+
+	return response, nil
+}
+
+// ParseImportProfileResponse parses an HTTP response from a ImportProfileWithResponse call
+func ParseImportProfileResponse(rsp *http.Response) (*ImportProfileResponse, error) {
+	bodyBytes, err := io.ReadAll(rsp.Body)
+	defer func() { _ = rsp.Body.Close() }()
+	if err != nil {
+		return nil, err
+	}
+
+	response := &ImportProfileResponse{
 		Body:         bodyBytes,
 		HTTPResponse: rsp,
 	}
@@ -3858,6 +5304,32 @@ func ParseUpdateProfileResponse(rsp *http.Response) (*UpdateProfileResponse, err
 	return response, nil
 }
 
+// ParseExportProfileResponse parses an HTTP response from a ExportProfileWithResponse call
+func ParseExportProfileResponse(rsp *http.Response) (*ExportProfileResponse, error) {
+	bodyBytes, err := io.ReadAll(rsp.Body)
+	defer func() { _ = rsp.Body.Close() }()
+	if err != nil {
+		return nil, err
+	}
+
+	response := &ExportProfileResponse{
+		Body:         bodyBytes,
+		HTTPResponse: rsp,
+	}
+
+	switch {
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 200:
+		var dest map[string]interface{}
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON200 = &dest
+
+	}
+
+	return response, nil
+}
+
 // ParsePauseResponse parses an HTTP response from a PauseWithResponse call
 func ParsePauseResponse(rsp *http.Response) (*PauseResponse, error) {
 	bodyBytes, err := io.ReadAll(rsp.Body)
@@ -3899,6 +5371,22 @@ func ParseStartRunResponse(rsp *http.Response) (*StartRunResponse, error) {
 	}
 
 	response := &StartRunResponse{
+		Body:         bodyBytes,
+		HTTPResponse: rsp,
+	}
+
+	return response, nil
+}
+
+// ParseDeleteScheduleResponse parses an HTTP response from a DeleteScheduleWithResponse call
+func ParseDeleteScheduleResponse(rsp *http.Response) (*DeleteScheduleResponse, error) {
+	bodyBytes, err := io.ReadAll(rsp.Body)
+	defer func() { _ = rsp.Body.Close() }()
+	if err != nil {
+		return nil, err
+	}
+
+	response := &DeleteScheduleResponse{
 		Body:         bodyBytes,
 		HTTPResponse: rsp,
 	}
