@@ -36,7 +36,7 @@ GitHub Releases, verifies its SHA-256, and installs to
 
 ```bash
 curl -sSL https://raw.githubusercontent.com/trafficmorph-gif/tm-cli/main/install.sh \
-  | TM_VERSION=v0.2.1 sh
+  | TM_VERSION=v0.3.0 sh
 ```
 
 **Override the install dir** (e.g. inside Docker):
@@ -49,7 +49,7 @@ curl -sSL https://raw.githubusercontent.com/trafficmorph-gif/tm-cli/main/install
 ### GitHub Actions
 
 ```yaml
-- uses: trafficmorph-gif/tm-cli/cli/action@v0.2.1
+- uses: trafficmorph-gif/tm-cli/cli/action@v0.3.0
   with:
     api-key: ${{ secrets.TRAFFICMORPH_API_KEY }}
     base-url: https://app.your-trafficmorph-host.com
@@ -79,7 +79,7 @@ sudo cp bin/tm /usr/local/bin/
 
 ```bash
 $ tm version
-tm v0.2.1 (spec v1)
+tm v0.3.0 (spec v1)
 ```
 
 ## Prerequisites

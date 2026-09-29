@@ -15,7 +15,7 @@ jobs:
   load-test:
     runs-on: ubuntu-latest
     steps:
-      - uses: trafficmorph-gif/tm-cli/cli/action@v0.2.1
+      - uses: trafficmorph-gif/tm-cli/cli/action@v0.3.0
         with:
           api-key: ${{ secrets.TRAFFICMORPH_API_KEY }}
           base-url: https://app.your-trafficmorph-host.com
@@ -45,7 +45,7 @@ NO_BASELINE). The job fails when the verdict matches.
 
 ## Version pinning
 
-**Always pin to an exact tag** (`@v0.2.1`) in production workflows.
+**Always pin to an exact tag** (`@v0.3.0`) in production workflows.
 `@v1` (the moving major-version convention some actions maintain)
 is NOT published — Renovate/Dependabot will surface release updates
 as PRs, which is the safe trade-off.
@@ -74,7 +74,7 @@ as PRs, which is the safe trade-off.
 
 ## Action ref vs binary version — they're independent
 
-**Important:** pinning the action ref (`@v0.2.1`) selects which
+**Important:** pinning the action ref (`@v0.3.0`) selects which
 `action.yml` runs. It does **not** select which `tm` binary gets
 installed — that's controlled by the `version` input, which defaults
 to `latest`.
@@ -82,7 +82,7 @@ to `latest`.
 So the bare invocation:
 
 ```yaml
-- uses: trafficmorph-gif/tm-cli/cli/action@v0.2.1
+- uses: trafficmorph-gif/tm-cli/cli/action@v0.3.0
 ```
 
 …runs the v0.2.0 action.yml but installs **the latest** release binary
@@ -90,7 +90,7 @@ So the bare invocation:
 both:
 
 ```yaml
-- uses: trafficmorph-gif/tm-cli/cli/action@v0.2.1
+- uses: trafficmorph-gif/tm-cli/cli/action@v0.3.0
   with:
     version: v0.2.0
 ```
@@ -103,7 +103,7 @@ validation. Two valid ways to keep the two pins in sync:
 **Option 1 — repeat the literal** (simplest):
 
 ```yaml
-- uses: trafficmorph-gif/tm-cli/cli/action@v0.2.1
+- uses: trafficmorph-gif/tm-cli/cli/action@v0.3.0
   with:
     version: v0.2.0
 ```
@@ -126,7 +126,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       # Single pin lives here, shared across every consumer workflow.
-      - uses: trafficmorph-gif/tm-cli/cli/action@v0.2.1
+      - uses: trafficmorph-gif/tm-cli/cli/action@v0.3.0
         with:
           version: v0.2.0
           api-key: ${{ secrets.TRAFFICMORPH_API_KEY }}
@@ -142,7 +142,7 @@ place per repo.
 Action and CLI binary versions are cut together as a single git tag
 (the release workflow builds the binary; checking out the tag
 provides the action.yml). After cutting `v0.2.0`, both
-`@v0.2.1` (action) and `version: v0.2.0` (binary) become available
+`@v0.3.0` (action) and `version: v0.2.0` (binary) become available
 on the same release.
 
 ```
