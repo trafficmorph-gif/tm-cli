@@ -8,11 +8,11 @@ info:
       * `X-Api-Key: tm_<key>` (recommended for CI scripts), or
       * `Authorization: Bearer tm_<key>` (recommended for SDKs).
 
-    **Plan gating (CLOUD).** On the hosted service, the public API is a TEAM+ feature â SOLO accounts receive HTTP 403 with `code=PLAN_UPGRADE_REQUIRED`. In **SELF_HOSTED** installs (`app.deployment-mode=SELF_HOSTED`), every endpoint is available to every authenticated user regardless of stored plan tier.
+    **Plan gating (CLOUD).** On the hosted service, the public API is a TEAM+ feature — SOLO accounts receive HTTP 403 with `code=PLAN_UPGRADE_REQUIRED`. In **SELF_HOSTED** installs (`app.deployment-mode=SELF_HOSTED`), every endpoint is available to every authenticated user regardless of stored plan tier.
 
-    **Rate limiting.** Each API key has plan-tier-derived limits enforced by `ApiRateLimitFilter`. Rate-limited responses are HTTP 429 with a `Retry-After` header.
+    **Rate limiting.** Requests are limited per user with a sliding window (`api.rate-limit.requests-per-minute`, default 60; the current value is `limits.apiRequestsPerMinute` in `GET /api/v1/account`). Rate-limited responses are HTTP 429 with a `Retry-After` header.
 
-    **Fetching this spec programmatically.** Always use the explicit group URLs `/v3/api-docs/v1` (JSON) or `/v3/api-docs.yaml/v1` (YAML â note the `.yaml` extension is on the BASE path, not the group). The default un-grouped URLs `/v3/api-docs` and `/v3/api-docs.yaml` are intentionally blocked â 401 for unauthenticated callers and 403 for authenticated ones. They would otherwise scan every internal controller in the boot context and leak admin / auth / billing endpoints. Configure SDK generators (`openapi-generator-cli`, `oapi-codegen`, etc.) to point at the v1 group URL directly.
+    **Fetching this spec programmatically.** Always use the explicit group URLs `/v3/api-docs/v1` (JSON) or `/v3/api-docs.yaml/v1` (YAML — note the `.yaml` extension is on the BASE path, not the group). The default un-grouped URLs `/v3/api-docs` and `/v3/api-docs.yaml` are intentionally blocked — 401 for unauthenticated callers and 403 for authenticated ones. They would otherwise scan every internal controller in the boot context and leak admin / auth / billing endpoints. Configure SDK generators (`openapi-generator-cli`, `oapi-codegen`, etc.) to point at the v1 group URL directly.
   contact:
     name: TrafficMorph
     url: https://trafficmorph.example.com
@@ -29,30 +29,39 @@ security:
 - BearerAuth: []
 tags:
 - name: Variables sets
-  description: "CSV-style attached variables â sampled per-request to make profiles\
+  description: "CSV-style attached variables — sampled per-request to make profiles\
     \ replay traffic with realistic per-request data (authenticated tokens, parameterized\
     \ URLs, etc.). Pairs with the capture-import flow that auto-creates these from\
     \ production traffic samples."
+- name: History
+  description: "Past runs: list, filter, inspect, compare and delete. Carries per-run\
+    \ latency / throughput / error metrics and the auto-comparison verdict against\
+    \ the selected baseline — the key endpoint for CI quality gates."
 - name: Domains
   description: Domain ownership verification. Profiles can only target hosts the user
-    has proven they own â via DNS TXT record or HTTP-token challenge.
-- name: Captures
-  description: JSONL traffic-capture import. Preview a captured trace and atomically
-    materialise detected endpoints as TrafficMorph profiles + variables sets. Useful
-    for bootstrapping a load test from real production traffic without hand-modelling
-    the request shape.
+    has proven they own — via DNS TXT record or HTTP-token challenge.
 - name: Profiles
   description: "Traffic profile CRUD. A profile holds the target endpoint, RPS curve,\
     \ request body / headers, optional scripts, optional schedule, and alert policy\
     \ that drive each run."
+- name: Captures
+  description: "JSONL traffic-capture import. Preview a captured trace and atomically\
+    \ materialise detected endpoints as TrafficMorph profiles + variables sets. Useful\
+    \ for bootstrapping a load test from real production traffic without hand-modelling\
+    \ the request shape. The capture is either uploaded (`/analyse`, `/import`) or\
+    \ read from a configured capture source (`/analyse-remote`, `/import-remote`;\
+    \ see the Capture sources tag)."
 - name: Runs
   description: "Start, stop, pause, and resume traffic runs for a saved profile."
+- name: Capture sources
+  description: |-
+    Read-only access to the remote capture sources (SFTP servers, S3 buckets) configured in the web UI: list them, list the capture files on one, then analyse or import a file with `POST /api/v1/captures/analyse-remote` and `/import-remote`.
+
+    Creating, editing, deleting and connection-testing sources are deliberately **not** available through the API. Those operations handle the stored credentials, which are managed only in the web UI and are never returned by any endpoint.
 - name: Regions
   description: Dispatch regions a run can originate from.
-- name: History
-  description: Read-only access to past runs. Carries per-run latency / throughput
-    / error metrics and the auto-comparison verdict against the selected baseline
-    â the key endpoint for CI quality gates.
+- name: Account
+  description: "The calling account's plan, limits, usage and feature gates."
 paths:
   /api/v1/profiles/{id}:
     get:
@@ -61,7 +70,7 @@ paths:
       summary: Get a profile by id
       description: "Returns the full profile including its schedule (if any) and current\
         \ run status. Returns 400 if the profile doesn't exist or belongs to a different\
-        \ user â the service throws `IllegalArgumentException(\"Profile not found\"\
+        \ user — the service throws `IllegalArgumentException(\"Profile not found\"\
         )` for both cases, and the global handler maps that to 400."
       operationId: getProfile
       parameters:
@@ -92,7 +101,7 @@ paths:
       - Profiles
       summary: Update an existing profile
       description: |-
-        Ownership-checks the profile by path id, then updates that specific row in place. The body's `name` is the new value to store, not a lookup key â even if it matches a different profile's name, only the path-id row is mutated. (The save service has both an id-based and a name-based code path; the controller pins the path id on the save request so the id-based branch runs.)
+        Ownership-checks the profile by path id, then updates that specific row in place. The body's `name` is the new value to store, not a lookup key — even if it matches a different profile's name, only the path-id row is mutated. (The save service has both an id-based and a name-based code path; the controller pins the path id on the save request so the id-based branch runs.)
 
         Name uniqueness is NOT enforced server-side: PUT will happily produce a duplicate-named pair under the same user. Subsequent name-keyed operations (POST `/profiles` upsert) would then resolve to the most-recently-created duplicate, which is rarely what the caller wanted. Clients that care about uniqueness (e.g. the MCP server's `tm_update_profile`) should pre-flight a `GET /profiles` and reject renames that would collide.
 
@@ -132,7 +141,7 @@ paths:
       - Profiles
       summary: Delete a profile
       description: Removes the profile and its associated schedule. Any in-flight
-        run is cancelled. Run history is retained â only the profile definition is
+        run is cancelled. Run history is retained — only the profile definition is
         removed.
       operationId: deleteProfile
       parameters:
@@ -156,7 +165,7 @@ paths:
       - Variables sets
       summary: List the user's variables sets
       description: "Returns metadata for every variables set owned by the API key's\
-        \ user. The raw CSV content is intentionally omitted from list responses â\
+        \ user. The raw CSV content is intentionally omitted from list responses —\
         \ use `GET /{id}` for a single set's metadata, or download the CSV via the\
         \ in-app UI endpoint if you need row-level inspection."
       operationId: listVariablesSets
@@ -174,9 +183,9 @@ paths:
       - Variables sets
       summary: Create a variables set from inline CSV content
       description: |-
-        CSV is uploaded as a string in the JSON body (NOT as a multipart file). Size-capped at the parser's `MAX_BYTES` â for larger sets, downsample client-side before uploading.
+        CSV is uploaded as a string in the JSON body (NOT as a multipart file). Size-capped at the parser's `MAX_BYTES` — for larger sets, downsample client-side before uploading.
 
-        The CSV's first row is the column header. Columns whose names match `$$macro$$` placeholders in the profile's URL / body / headers get substituted per-request at run time. An optional special column `weight` (case-insensitive) makes rows pickable with a probability proportional to its value â useful for replaying real traffic distributions.
+        The CSV's first row is the column header. Columns whose names match `$$macro$$` placeholders in the profile's URL / body / headers get substituted per-request at run time. An optional special column `weight` (case-insensitive) makes rows pickable with a probability proportional to its value — useful for replaying real traffic distributions.
 
         Sampling modes (mirrors `VariablesSet.SamplingMode`):
           - `ROW`: one row sampled per request; ALL columns substituted from that row. Preserves cross-column correlations. REQUIRES a `weight` column.
@@ -226,7 +235,7 @@ paths:
       - Profiles
       summary: Create or upsert a profile by name (optionally with schedule)
       description: |-
-        Saves a traffic profile keyed by `name`. If a profile with the same name already exists for this user, **it is updated in place rather than rejected** â the underlying service is an upsert. Treat this endpoint as idempotent-by-name. Use `PUT /{id}` instead if you need to update a profile and rename it at the same time.
+        Saves a traffic profile keyed by `name`. If a profile with the same name already exists for this user, **it is updated in place rather than rejected** — the underlying service is an upsert. Treat this endpoint as idempotent-by-name. Use `PUT /{id}` instead if you need to update a profile and rename it at the same time.
 
         If the request body includes a `schedule` block, a `ScheduledRun` is created or replaced in the same logical transaction.
 
@@ -260,7 +269,7 @@ paths:
       tags:
       - Runs
       summary: Stop the in-flight run for a profile
-      description: Resets the profile's run state. Fully idempotent â succeeds with
+      description: Resets the profile's run state. Fully idempotent — succeeds with
         `status="IDLE"` even when no run is currently in flight and even when the
         profile id is unknown to the user (the run-state store is keyed by user+profile
         and silently no-ops on misses). Any in-flight dispatch loops cancel within
@@ -379,7 +388,7 @@ paths:
       summary: Resume a paused run
       description: "Continues dispatch from where `/pause` left off. The RPS curve\
         \ and any SEQUENTIAL variables-set cursors retain their pre-pause position.\
-        \ **Not** idempotent in the absence-of-state case â unlike `/pause` and `/stop`,\
+        \ **Not** idempotent in the absence-of-state case — unlike `/pause` and `/stop`,\
         \ calling `/resume` without an in-flight or paused run is a client error."
       operationId: resume
       parameters:
@@ -412,7 +421,7 @@ paths:
       - Runs
       summary: Pause the in-flight run for a profile
       description: "Suspends dispatch. The run retains its position on the RPS curve\
-        \ and can be resumed via `/resume`. Idempotent â when no run is currently\
+        \ and can be resumed via `/resume`. Idempotent — when no run is currently\
         \ in flight the response is `status=\"IDLE\"` rather than an error, so a CI\
         \ workflow can call `/pause` without first checking state. Useful when a step\
         \ needs to inspect intermediate metrics without losing progress."
@@ -434,6 +443,44 @@ paths:
             '*/*':
               schema:
                 $ref: "#/components/schemas/TrafficRunControlResponse"
+  /api/v1/profiles/import:
+    post:
+      tags:
+      - Profiles
+      summary: Import a profile from a portable JSON document
+      description: |-
+        Saves a `trafficmorph-profile-v1` document, as returned by `GET /profiles/{id}/export`. The body must carry `"_format": "trafficmorph-profile-v1"` plus `name`, `duration`, `endpointUrl` and `points`; the other export fields are optional.
+
+        Upsert by name, like `POST /profiles`: if a profile with the same name (trimmed, case-insensitive) exists, **it is overwritten in place**, keeping its `initScript`, `cleanupScript`, `variablesSetIds` and `region` because the document can't carry them. A new name creates a profile with those unset. To copy a profile instead of overwriting it, change `name` in the document first.
+
+        A `schedule` in the document replaces the profile's schedule; without one the existing schedule is kept. A schedule that can't be saved (loop-enabled profile, invalid timezone or mode, slot limit reached) does not fail the import: the profile is still saved and the reason is listed in `warnings`.
+      operationId: importProfile
+      requestBody:
+        description: "A `trafficmorph-profile-v1` document, as returned by `GET /profiles/{id}/export`."
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: true
+        required: true
+      responses:
+        "201":
+          description: "Profile saved; response carries its id, name, callback secret\
+            \ and any `warnings`. Returned for both new profiles and name-upsert overwrites."
+          content:
+            '*/*':
+              schema:
+                $ref: "#/components/schemas/ImportTrafficProfileResponse"
+        "400":
+          description: "Nothing saved. Covers: `_format` missing or not `trafficmorph-profile-v1`,\
+            \ a required field missing or of the wrong type, invalid or blocked URL,\
+            \ points beyond `duration`, per-user profile limit reached on a new name,\
+            \ or init/cleanup scripts on the overwritten profile when the plan no\
+            \ longer allows them. Body: `{\"error\":\"<reason>\"}`."
+          content:
+            '*/*':
+              schema:
+                $ref: "#/components/schemas/ImportTrafficProfileResponse"
   /api/v1/domains:
     get:
       tags:
@@ -458,7 +505,7 @@ paths:
       summary: Register a new domain for verification
       description: "Idempotent. On first call, generates the verification token and\
         \ creates the record. On subsequent calls for the same `(user, domain)`, returns\
-        \ the existing record with the same token â clients can safely retry without\
+        \ the existing record with the same token — clients can safely retry without\
         \ producing duplicates. The response carries the challenge values the user\
         \ must install before calling `/verify/dns` or `/verify/http`."
       operationId: add
@@ -492,7 +539,7 @@ paths:
       description: "Fetches `https://{domain}/.well-known/trafficmorph-verify.txt`\
         \ (falling back to HTTP if HTTPS fails) and matches its body against the challenge\
         \ token. Alternative to DNS verification for users without DNS control. **On\
-        \ miss**, returns 400 with a remediation message â same fail-fast contract\
+        \ miss**, returns 400 with a remediation message — same fail-fast contract\
         \ as `/verify/dns`."
       operationId: verifyHttp
       parameters:
@@ -529,7 +576,7 @@ paths:
       description: "Looks up the configured TXT record at `_trafficmorph-verify.{domain}`\
         \ and matches it against the challenge value issued when the domain was added.\
         \ On match, the domain flips to `VERIFIED` and can be used as a profile target.\
-        \ **On miss**, returns 400 with a remediation message â the call is treated\
+        \ **On miss**, returns 400 with a remediation message — the call is treated\
         \ as a failed verification attempt rather than a polling no-op, so CI flows\
         \ fail fast instead of looping on always-`PENDING` 200s."
       operationId: verifyDns
@@ -565,9 +612,9 @@ paths:
       - Captures
       summary: Import selected endpoints from a JSONL capture as profiles
       description: |-
-        Atomic commit. Re-derives the analysis from the uploaded file (no server-side state is kept between `/analyse` and `/import`), picks the groups named in the `selections` JSON, and persists each one as a TrafficMorph profile â plus a variables set whenever the group has variable positions. Either every selection lands or none. Re-upload the same JSONL file you analysed; selections key by `(method, urlSkeleton)` so re-analysis matches the same groups.
+        Atomic commit. Re-derives the analysis from the uploaded file (no server-side state is kept between `/analyse` and `/import`), picks the groups named in the `selections` JSON, and persists each one as a TrafficMorph profile — plus a variables set whenever the group has variable positions. Either every selection lands or none. Re-upload the same JSONL file you analysed; selections key by `(method, urlSkeleton)` so re-analysis matches the same groups.
 
-        **Name collisions are NOT errors.** If a chosen `profileName` is already taken for this user, the importer auto-suffixes with `(2)`, `(3)`, â¦ until unique. The created entity in the response carries the final name, so the client can show what actually landed. (Same convention applies to variables-set names.)
+        **Name collisions are NOT errors.** If a chosen `profileName` is already taken for this user, the importer auto-suffixes with `(2)`, `(3)`, … until unique. The created entity in the response carries the final name, so the client can show what actually landed. (Same convention applies to variables-set names.)
       operationId: importCapture
       parameters:
       - name: selections
@@ -590,7 +637,7 @@ paths:
               properties:
                 file:
                   type: string
-                  description: JSONL traffic-capture file â the same file you analysed.
+                  description: JSONL traffic-capture file — the same file you analysed.
                   format: binary
       responses:
         "413":
@@ -614,13 +661,65 @@ paths:
             '*/*':
               schema:
                 $ref: "#/components/schemas/CaptureImportResult"
+  /api/v1/captures/import-remote:
+    post:
+      tags:
+      - Captures
+      summary: Import selected endpoints from a capture stored on a capture source
+      description: |-
+        Same atomic commit as `/import`, but the capture is read from one of the user's capture sources and `selections` is an inline JSON object rather than a string field. The server re-analyses the file (no state is kept between `/analyse-remote` and `/import-remote`), matches each selection by `(method, urlSkeleton)`, and persists each match as a profile, plus a variables set when the group has variable positions. Either every selection lands or none. Taken profile names are auto-suffixed `(2)`, `(3)`, ... rather than rejected; the response carries the final names.
+
+        **Retry safety.** A 200 means the import committed: a transport error while closing the remote stream after a successful import is logged, not returned. A 400 or 429 means nothing was imported.
+
+        **Limits.** Same size cap and row / line caps as `/analyse-remote`. Calls for the same source are limited to one every 2 seconds by default (server-configurable), separately from `/analyse-remote`; a faster call gets 429 with `Retry-After`.
+      operationId: importRemoteCapture
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CaptureImportRemoteRequest"
+        required: true
+      responses:
+        "400":
+          description: "Invalid body (missing `sourceId` / `selections`, blank `path`,\
+            \ a selection with blank `method` or `urlSkeleton`); source not found\
+            \ or owned by another user (`{\"error\":\"Capture source not found\"}`);\
+            \ the file could not be opened (`{\"error\":\"Failed to open remote stream:\
+            \ <reason>\"}`); the capture failed to re-parse; or the per-user profile\
+            \ limit was reached. Body: `{\"error\":\"<reason>\"}`."
+          content:
+            '*/*':
+              schema:
+                $ref: "#/components/schemas/CaptureImportResult"
+        "429":
+          description: "Imported from this source too recently. Body: `{\"error\"\
+            :\"Too many import stream requests for this source. Try again in N seconds.\"\
+            }`."
+          headers:
+            Retry-After:
+              description: Seconds to wait before retrying.
+              style: simple
+              schema:
+                type: integer
+          content:
+            '*/*':
+              schema:
+                $ref: "#/components/schemas/CaptureImportResult"
+        "200":
+          description: "Import complete; response carries created-profile ids (with\
+            \ the final, possibly auto-suffixed names), any selections skipped because\
+            \ no group in the re-analysis matched, and non-fatal warnings."
+          content:
+            '*/*':
+              schema:
+                $ref: "#/components/schemas/CaptureImportResult"
   /api/v1/captures/analyse:
     post:
       tags:
       - Captures
       summary: Analyse a JSONL capture and preview the proposed profiles
       description: "Uploads a JSONL traffic capture and returns a structured preview\
-        \ â per detected endpoint: the proposed URL skeleton, derived RPS curve, extracted\
+        \ — per detected endpoint: the proposed URL skeleton, derived RPS curve, extracted\
         \ URL + body variables (with cardinality buckets and sample values), and a\
         \ few sample request URLs. **No state is persisted.** Pair with `/import`\
         \ to commit the selections you want."
@@ -658,13 +757,62 @@ paths:
             '*/*':
               schema:
                 $ref: "#/components/schemas/CaptureAnalysisResponse"
+  /api/v1/captures/analyse-remote:
+    post:
+      tags:
+      - Captures
+      summary: Analyse a JSONL capture stored on a capture source
+      description: |-
+        Same preview as `/analyse`, but the capture is read from one of the user's capture sources (SFTP / S3) instead of being uploaded. Take `sourceId` from `GET /api/v1/capture-sources` and `path` from `GET /api/v1/capture-sources/{id}/files`. The file is streamed through the server and never stored, and nothing is created; only the source's `lastListedAt` / `lastError` are updated. Pair with `/import-remote` to commit the groups you want.
+
+        **Limits.** Files larger than the remote-file cap (120 MB by default) are rejected, and the same row / line caps as `/analyse` apply. Calls for the same source are limited to one every 2 seconds by default (server-configurable), counted separately from `/import-remote` so analyse-then-import back to back is fine; a faster call gets 429 with `Retry-After`.
+      operationId: analyseRemoteCapture
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CaptureAnalyseRemoteRequest"
+        required: true
+      responses:
+        "200":
+          description: Analysis complete; response carries one group per detected
+            endpoint.
+          content:
+            '*/*':
+              schema:
+                $ref: "#/components/schemas/CaptureAnalysisResponse"
+        "400":
+          description: "Missing `sourceId` or blank `path`; source not found or owned\
+            \ by another user (`{\"error\":\"Capture source not found\"}`); the file\
+            \ could not be opened (`{\"error\":\"Failed to open remote stream: <reason>\"\
+            }`, e.g. missing file, path outside the source's root, authentication\
+            \ failure, file over the size cap); or the capture failed to parse. Body:\
+            \ `{\"error\":\"<reason>\"}`."
+          content:
+            '*/*':
+              schema:
+                $ref: "#/components/schemas/CaptureAnalysisResponse"
+        "429":
+          description: "Analysed from this source too recently. Body: `{\"error\"\
+            :\"Too many analyse stream requests for this source. Try again in N seconds.\"\
+            }`."
+          headers:
+            Retry-After:
+              description: Seconds to wait before retrying.
+              style: simple
+              schema:
+                type: integer
+          content:
+            '*/*':
+              schema:
+                $ref: "#/components/schemas/CaptureAnalysisResponse"
   /api/v1/variables-sets/{id}:
     get:
       tags:
       - Variables sets
       summary: Get a single variables set's metadata
       description: "Returns id, name, sampling mode, macro columns, optional weight\
-        \ column, row count, size, and timestamps. Raw CSV content NOT included â\
+        \ column, row count, size, and timestamps. Raw CSV content NOT included —\
         \ that's a separate concern served only by the in-app UI endpoint."
       operationId: get
       parameters:
@@ -696,7 +844,7 @@ paths:
       - Variables sets
       summary: Delete a variables set
       description: "Removes the set. **Fails fast (HTTP 400) if any profile still\
-        \ has this set attached** â the response body's error message names the referencing\
+        \ has this set attached** — the response body's error message names the referencing\
         \ profile(s) so the caller can detach them first. There is NO auto-detach:\
         \ the deliberate design is to make accidental attachment loss visible. To\
         \ delete an attached set, either (a) detach via `tm_update_profile` / the\
@@ -716,7 +864,7 @@ paths:
         "400":
           description: "Set not found, not owned by this user, OR still attached to\
             \ one or more profiles. The error body for the still-attached case has\
-            \ shape `{\"error\":\"Can't delete 'name' â still attached to profile(s):\
+            \ shape `{\"error\":\"Can't delete 'name' — still attached to profile(s):\
             \ A, B, .... Detach it from those profiles first.\"}`."
         "204":
           description: Variables set deleted.
@@ -849,6 +997,44 @@ paths:
             '*/*':
               schema:
                 $ref: "#/components/schemas/ApiRunStatusResponse"
+  /api/v1/profiles/{id}/export:
+    get:
+      tags:
+      - Profiles
+      summary: Export a profile as a portable JSON document
+      description: |-
+        Returns the profile as a `trafficmorph-profile-v1` document, the same file the web UI's Export button downloads. Feed it to `POST /profiles/import` to restore it or copy it to another account.
+
+        Fields: `_format`, `name`, `duration`, `loop`, `endpointUrl`, `httpMethod`, `requestPayload`, `requestHeaders`, `points`, `interpolationMode`, `responseScript`, `callbackUrl`, `readinessUrl`, `autoAlertEnabled`, `autoAlertMinSeverity`, `autoAlertCooldownMinutes`, `autoAlertRecipients`, and `schedule` (`mode`, `timezone`, `notifyEmails`, `slots`) only when the profile has one.
+
+        Not included: the profile id, `initScript`, `cleanupScript`, `variablesSetIds`, `region` and the callback secret. Use `GET /profiles/{id}` for the full profile.
+      operationId: exportProfile
+      parameters:
+      - name: id
+        in: path
+        description: Profile id.
+        required: true
+        schema:
+          type: integer
+          format: int64
+        example: 42
+      responses:
+        "200":
+          description: The portable document.
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+        "400":
+          description: "Profile not found or not owned by this user. Body: `{\"error\"\
+            :\"Profile not found\"}`."
+          content:
+            '*/*':
+              schema:
+                type: object
+                additionalProperties:
+                  type: object
   /api/v1/history:
     get:
       tags:
@@ -909,14 +1095,16 @@ paths:
           type: string
       - name: from
         in: query
-        description: Lower bound on `startedAt` (ISO-8601).
+        description: "Lower bound on the run's `createdAt` (ISO-8601), the time its\
+          \ history row was written when the run finished."
         required: false
         schema:
           type: string
           format: date-time
       - name: to
         in: query
-        description: Upper bound on `startedAt` (ISO-8601).
+        description: "Upper bound on the run's `createdAt` (ISO-8601), the time its\
+          \ history row was written when the run finished."
         required: false
         schema:
           type: string
@@ -970,6 +1158,51 @@ paths:
                 type: object
                 additionalProperties:
                   type: object
+    delete:
+      tags:
+      - History
+      summary: Delete a run from history
+      description: "Permanently removes one run's history record and metrics. Takes\
+        \ the history `id` (not the in-memory `runId`). The run disappears from listings\
+        \ and can no longer be compared; verdicts already stored on other runs are\
+        \ kept, and later runs pick their automatic baseline from the remaining history.\
+        \ Only finished runs have a history record; to end a run in flight use `POST\
+        \ /profiles/{id}/stop`."
+      operationId: deleteRun
+      parameters:
+      - name: id
+        in: path
+        description: Run-history id (the `id` field of a history item).
+        required: true
+        schema:
+          type: integer
+          format: int64
+        example: 1234
+      responses:
+        "400":
+          description: "Run not found or not owned by this user (the two aren't distinguished,\
+            \ so ids of other accounts can't be probed). Body: `{\"error\":\"Run history\
+            \ not found\"}`. Deleting the same id twice returns this on the second\
+            \ call."
+        "204":
+          description: Run deleted.
+  /api/v1/history/filters:
+    get:
+      tags:
+      - History
+      summary: List the values the history filters accept
+      description: "Everything needed to build a `GET /api/v1/history` query without\
+        \ guessing: the profiles, regions and tags present in this account's run history\
+        \ (each matches at least one run), plus the fixed `triggeredBy` and `autoVerdict`\
+        \ value sets. A tag or region that isn't listed matches no runs."
+      operationId: listHistoryFilters
+      responses:
+        "200":
+          description: Filter values; lists are empty when there is no history.
+          content:
+            '*/*':
+              schema:
+                $ref: "#/components/schemas/ApiHistoryFiltersResponse"
   /api/v1/history/compare:
     get:
       tags:
@@ -1017,6 +1250,144 @@ paths:
             '*/*':
               schema:
                 $ref: "#/components/schemas/RunComparisonResponse"
+  /api/v1/capture-sources:
+    get:
+      tags:
+      - Capture sources
+      summary: List the user's remote capture sources
+      description: "Returns every capture source owned by the API key's user, ordered\
+        \ by name: id, name, kind (`SFTP` or `S3`), root path / prefix, and the outcome\
+        \ of the last listing or read (`lastListedAt`, `lastError`). Does not contact\
+        \ the remote servers. Credentials are never included. An empty list means\
+        \ no source has been configured; sources can only be added in the web UI."
+      operationId: listCaptureSources
+      responses:
+        "200":
+          description: Capture sources; may be empty.
+          content:
+            '*/*':
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/CaptureSourceResponse"
+  /api/v1/capture-sources/{id}/files:
+    get:
+      tags:
+      - Capture sources
+      summary: List capture files on a remote capture source
+      description: |-
+        Connects to the source and lists the `.jsonl` / `.ndjson` files directly under its root path (SFTP) or key prefix (S3), newest first. Subdirectories are not descended and hidden (dot) files are skipped. Pass a returned `path` to `POST /api/v1/captures/analyse-remote` or `/import-remote`.
+
+        Updates the source's `lastListedAt` on success and `lastError` on failure.
+
+        **Rate limit:** each call opens a connection to the remote server, so calls for the same source are limited to one every 3 seconds by default (server-configurable); a faster call gets 429 with `Retry-After`.
+      operationId: listCaptureSourceFiles
+      parameters:
+      - name: id
+        in: path
+        description: Capture source id (from `listCaptureSources`).
+        required: true
+        schema:
+          type: integer
+          format: int64
+        example: 7
+      - name: limit
+        in: query
+        description: Maximum number of files to return. Values outside 1 to 1000 are
+          clamped into that range.
+        required: false
+        schema:
+          type: integer
+          format: int32
+          default: 100
+      responses:
+        "429":
+          description: "Listed this source too recently. Body: `{\"error\":\"Too many\
+            \ list files requests for this source. Try again in N seconds.\"}`."
+          headers:
+            Retry-After:
+              description: Seconds to wait before retrying.
+              style: simple
+              schema:
+                type: integer
+          content:
+            '*/*':
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/CaptureSourceFile"
+        "200":
+          description: "Matching files, newest first; may be empty."
+          content:
+            '*/*':
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/CaptureSourceFile"
+        "400":
+          description: "Source not found or owned by another user (`{\"error\":\"\
+            Capture source not found\"}`), or the remote listing failed (`{\"error\"\
+            :\"Failed to list files: <reason>\"}`, e.g. authentication failure, unreachable\
+            \ host, missing directory or bucket)."
+          content:
+            '*/*':
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/CaptureSourceFile"
+  /api/v1/account:
+    get:
+      tags:
+      - Account
+      summary: "Get the account's plan, limits and current usage"
+      description: "Returns the limits the server enforces for this account (RPS caps,\
+        \ concurrent runs, saved profiles, schedule slots, variables sets, request\
+        \ size, API rate), how much of each is in use, the monthly request quota,\
+        \ and which plan-gated features are available. Call it before creating profiles\
+        \ or starting runs to plan a load test that fits, instead of discovering a\
+        \ limit through a 400 or 409. Contains no personal data."
+      operationId: getAccount
+      responses:
+        "200":
+          description: Account summary.
+          content:
+            '*/*':
+              schema:
+                $ref: "#/components/schemas/ApiAccountResponse"
+        "403":
+          description: "API access not allowed for this account. Body: `{\"error\"\
+            :\"API access requires Team or Business plan.\",\"code\":\"PLAN_UPGRADE_REQUIRED\"\
+            }` on a SOLO plan, or `{\"error\":\"trial_expired\"}` once the trial has\
+            \ ended without a subscription."
+          content:
+            '*/*':
+              schema:
+                $ref: "#/components/schemas/ApiAccountResponse"
+  /api/v1/profiles/{id}/schedule:
+    delete:
+      tags:
+      - Profiles
+      summary: Remove a profile's schedule
+      description: |-
+        Deletes every schedule slot of the profile, so it stops running automatically. The profile itself and its run history are untouched, and a run the schedule already started is not stopped (use `POST /profiles/{id}/stop`). Idempotent: returns 204 also when the profile has no schedule.
+
+        This is the only v1 way to remove a schedule: `POST /profiles` and `PUT /profiles/{id}` without a `schedule` block leave the current schedule as it is.
+      operationId: deleteSchedule
+      parameters:
+      - name: id
+        in: path
+        description: Profile id.
+        required: true
+        schema:
+          type: integer
+          format: int64
+        example: 42
+      responses:
+        "204":
+          description: "Schedule removed, or there was none."
+        "400":
+          description: "Profile not found or not owned by this user. Body: `{\"error\"\
+            :\"Profile not found\"}`."
   /api/v1/domains/{id}:
     delete:
       tags:
@@ -1132,7 +1503,7 @@ components:
           maxLength: 30
           minLength: 0
           type: string
-          description: "Default dispatch region code for the profile's runs â web\
+          description: "Default dispatch region code for the profile's runs — web\
             \ UI, scheduled, and API runs that don't pick one (see `GET /api/v1/regions`).\
             \ Null keeps the current value; `\"\"` clears it (local)."
         readinessUrl:
@@ -1400,6 +1771,20 @@ components:
               \ commit id; filter with `GET /api/v1/history?tag=`. Normalized to lowercase\
               \ `[a-z0-9._-]`. At most 20 tags of 60 characters."
       description: Optional per-run settings. The whole body may be omitted.
+    ImportTrafficProfileResponse:
+      type: object
+      properties:
+        id:
+          type: integer
+          format: int64
+        name:
+          type: string
+        callbackSecret:
+          type: string
+        warnings:
+          type: array
+          items:
+            type: string
     AddDomainRequest:
       required:
       - domain
@@ -1466,6 +1851,52 @@ components:
           type: string
         reason:
           type: string
+    CaptureImportRemoteRequest:
+      required:
+      - path
+      - selections
+      - sourceId
+      type: object
+      properties:
+        sourceId:
+          type: integer
+          description: Id of one of the caller's capture sources.
+          format: int64
+          example: 7
+        path:
+          type: string
+          description: File `path` as returned by the source's file listing; the same
+            file you analysed.
+          example: captures/2026-09-01.jsonl
+        selections:
+          $ref: "#/components/schemas/CaptureImportRequest"
+    CaptureImportRequest:
+      required:
+      - groups
+      type: object
+      properties:
+        groups:
+          type: array
+          items:
+            $ref: "#/components/schemas/GroupSelection"
+      description: "Groups to import, keyed by `(method, urlSkeleton)` from the analysis.\
+        \ An empty `groups` list is a no-op."
+    GroupSelection:
+      required:
+      - method
+      - urlSkeleton
+      type: object
+      properties:
+        method:
+          type: string
+          description: "`method` of the analysis group, e.g. `GET`."
+        urlSkeleton:
+          type: string
+          description: "`urlSkeleton` of the analysis group, copied exactly."
+        profileName:
+          type: string
+          description: "Name for the new profile. Omitted or blank: a default such\
+            \ as `[capture] POST /api/bid`."
     CaptureAnalysisResponse:
       type: object
       properties:
@@ -1553,6 +1984,22 @@ components:
           type: array
           items:
             type: string
+    CaptureAnalyseRemoteRequest:
+      required:
+      - path
+      - sourceId
+      type: object
+      properties:
+        sourceId:
+          type: integer
+          description: Id of one of the caller's capture sources.
+          format: int64
+          example: 7
+        path:
+          type: string
+          description: File `path` as returned by the source's file listing (SFTP
+            path or S3 key). Must lie inside the source's `rootPath`.
+          example: captures/2026-09-01.jsonl
     RenameVariablesSetRequest:
       required:
       - name
@@ -1634,9 +2081,9 @@ components:
           type: object
           additionalProperties:
             type: integer
-            description: HTTP status code â responses so far.
+            description: HTTP status code → responses so far.
             format: int64
-          description: HTTP status code â responses so far.
+          description: HTTP status code → responses so far.
         currentRps:
           type: number
           description: Achieved RPS in the most recent bucket; null before the first
@@ -1705,6 +2152,64 @@ components:
           format: double
       description: "Most recent 5-second buckets, oldest first (at most 12, i.e. one\
         \ minute)."
+    ApiHistoryFiltersResponse:
+      type: object
+      properties:
+        profiles:
+          type: array
+          description: "Profiles that have at least one run in history, sorted by\
+            \ name. Includes profiles deleted since; use `id` as the `profileId` filter."
+          items:
+            $ref: "#/components/schemas/HistoryProfileOption"
+        regions:
+          type: array
+          description: "Region codes runs were dispatched from, sorted (`local` for\
+            \ the in-process region). Use as the `region` filter."
+          items:
+            type: string
+            description: "Region codes runs were dispatched from, sorted (`local`\
+              \ for the in-process region). Use as the `region` filter."
+        tags:
+          type: array
+          description: "Every tag applied to at least one run, sorted. Use as the\
+            \ `tag` filter."
+          items:
+            type: string
+            description: "Every tag applied to at least one run, sorted. Use as the\
+              \ `tag` filter."
+        triggeredBy:
+          type: array
+          description: "Accepted `triggeredBy` values: `api` (public API), `manual`\
+            \ (web UI), `scheduled` (schedule slot)."
+          items:
+            type: string
+            description: "Accepted `triggeredBy` values: `api` (public API), `manual`\
+              \ (web UI), `scheduled` (schedule slot)."
+        autoVerdicts:
+          type: array
+          description: "Accepted `autoVerdict` values: the regression verdict against\
+            \ the profile's baseline run."
+          items:
+            type: string
+            description: "Accepted `autoVerdict` values: the regression verdict against\
+              \ the profile's baseline run."
+      description: "Values accepted by the `GET /api/v1/history` query filters. `profiles`,\
+        \ `regions` and `tags` are drawn from the caller's run history, so each one\
+        \ matches at least one stored run; `triggeredBy` and `autoVerdicts` are the\
+        \ fixed value sets."
+    HistoryProfileOption:
+      type: object
+      properties:
+        id:
+          type: integer
+          description: Profile id; the `profileId` filter value.
+          format: int64
+          example: 42
+        name:
+          type: string
+          description: Profile name as of its most recent run.
+      description: "Profiles that have at least one run in history, sorted by name.\
+        \ Includes profiles deleted since; use `id` as the `profileId` filter."
     BootstrapResult:
       type: object
       properties:
@@ -1850,6 +2355,260 @@ components:
           type: array
           items:
             type: string
+    CaptureSourceResponse:
+      type: object
+      properties:
+        id:
+          type: integer
+          description: Source id; use it as `sourceId` for remote capture analyse
+            / import.
+          format: int64
+        name:
+          type: string
+        kind:
+          type: string
+          enum:
+          - SFTP
+          - S3
+        rootPath:
+          type: string
+          description: Directory (SFTP) or key prefix (S3) that file listing and reads
+            are confined to; null means the SFTP login directory or the bucket root.
+        lastListedAt:
+          type: string
+          description: When the source was last listed or read successfully; null
+            if never.
+          format: date-time
+        lastError:
+          type: string
+          description: "Error from the most recent failed test, listing or read; null\
+            \ after a success."
+        createdAt:
+          type: string
+          format: date-time
+        updatedAt:
+          type: string
+          format: date-time
+      description: A remote capture source (SFTP server or S3 bucket) configured in
+        the web UI. Stored credentials are never returned.
+    CaptureSourceFile:
+      type: object
+      properties:
+        path:
+          type: string
+          description: File identifier on the source (SFTP path or S3 key). Pass it
+            verbatim as `path` to `analyseRemoteCapture` / `importRemoteCapture`.
+        size:
+          type: integer
+          description: Size in bytes as reported by the remote server; 0 or -1 when
+            it didn't report one.
+          format: int64
+        modifiedAt:
+          type: string
+          description: Last-modified time reported by the remote server (best effort;
+            `1970-01-01T00:00:00Z` when unknown). Listings are ordered newest first.
+          format: date-time
+      description: A `.jsonl` / `.ndjson` file found on a capture source.
+    AccountFeatures:
+      type: object
+      properties:
+        remoteRegions:
+          type: boolean
+          description: "Runs may be dispatched from regions other than `local` (`GET\
+            \ /api/v1/regions` lists them). When false, a non-local `region` is rejected\
+            \ with 400."
+        lifecycleScripts:
+          type: boolean
+          description: "Profiles may carry init and cleanup scripts. When false, saving\
+            \ or starting a profile with either script returns 400. Response scripts\
+            \ are available on every plan."
+        domainVerificationRequired:
+          type: boolean
+          description: Runs may only target domains verified via `/api/v1/domains`.
+            False only for administrator accounts.
+      description: Plan-gated capabilities available to this account.
+    AccountLimits:
+      type: object
+      properties:
+        maxRps:
+          type: integer
+          description: "Account-wide requests-per-second cap, shared by all of the\
+            \ account's concurrently running profiles (including follow-up requests\
+            \ sent from response scripts). Curve points above it are accepted; dispatch\
+            \ is clamped to the cap. 0 = no cap."
+          format: int32
+          example: 1500
+        maxProfileRps:
+          type: integer
+          description: Per-run requests-per-second cap applied to each profile's curve
+            on top of `maxRps`. Null = no per-run cap (only `maxRps` applies).
+          format: int32
+          nullable: true
+        maxConcurrentRuns:
+          type: integer
+          description: How many runs may be `RUNNING` or `PAUSED` at the same time.
+            Starting another returns 400 "Concurrent run limit reached"; restarting
+            a profile that is already running replaces its run and needs no free slot.
+            0 = no cap.
+          format: int32
+          example: 5
+        maxProfiles:
+          type: integer
+          description: Maximum saved profiles. Creating one more returns 400 "Profile
+            limit reached".
+          format: int32
+          example: 200
+        maxScheduledRuns:
+          type: integer
+          description: Maximum schedule slots (day-of-week + time entries) across
+            all profiles.
+          format: int32
+          example: 100
+        maxNotifyEmails:
+          type: integer
+          description: "Maximum recipient addresses per list: a schedule's notify\
+            \ emails and a profile's regression-alert recipients."
+          format: int32
+          example: 10
+        maxVariablesSets:
+          type: integer
+          description: Maximum uploaded variables sets (CSV data sets).
+          format: int32
+          example: 25
+        historyRetentionDays:
+          type: integer
+          description: Days run history is kept before the nightly cleanup deletes
+            it. Null when the account has no own setting and the server-wide default
+            applies.
+          format: int32
+          nullable: true
+          example: 30
+        maxRequestBytes:
+          type: integer
+          description: Maximum UTF-8 size of a profile's `requestBody` plus its `requestHeaders`
+            JSON string. Checked when a profile is saved and when a run starts. 0
+            = no cap.
+          format: int32
+          example: 262144
+        maxRequestHeadersBytes:
+          type: integer
+          description: Maximum UTF-8 size of the `requestHeaders` JSON string. 0 =
+            no cap.
+          format: int32
+          example: 65536
+        maxRequestHeaderCount:
+          type: integer
+          description: Maximum number of request headers. 0 = no cap.
+          format: int32
+          example: 64
+        maxRequestHeaderBytes:
+          type: integer
+          description: "Maximum UTF-8 size of one header line: name + value + 4 bytes\
+            \ for the `: ` separator and line break. 0 = no cap."
+          format: int32
+          example: 8192
+        apiRequestsPerMinute:
+          type: integer
+          description: "Public-API calls allowed per user in a sliding 60-second window,\
+            \ shared by all of the account's API keys. Beyond it the API answers 429\
+            \ with a `Retry-After` header."
+          format: int32
+          example: 60
+      description: "Effective limits for this account: the plan's defaults with any\
+        \ per-account admin overrides applied."
+    AccountUsage:
+      type: object
+      properties:
+        usedRequests:
+          type: integer
+          description: "Requests sent this calendar month (UTC), including requests\
+            \ of runs still in flight."
+          format: int64
+          example: 1250000
+        includedRequests:
+          type: integer
+          description: "Monthly request quota. Once `usedRequests` reaches it, starting\
+            \ a run returns 409 `USAGE_LIMIT_REACHED` and looping runs complete at\
+            \ the end of their current iteration; a run already in flight is not cut\
+            \ short. 0 = no monthly quota (always 0 in `SELF_HOSTED`)."
+          format: int64
+          example: 30000000
+        activeRunCount:
+          type: integer
+          description: Runs currently `RUNNING` or `PAUSED`; compare with `limits.maxConcurrentRuns`.
+          format: int32
+        profileCount:
+          type: integer
+          description: Saved profiles; compare with `limits.maxProfiles`.
+          format: int64
+        scheduledRunCount:
+          type: integer
+          description: Schedule slots in use; compare with `limits.maxScheduledRuns`.
+          format: int64
+        variablesSetCount:
+          type: integer
+          description: Uploaded variables sets; compare with `limits.maxVariablesSets`.
+          format: int64
+      description: Current consumption of the account's limits.
+    ApiAccountResponse:
+      type: object
+      properties:
+        deploymentMode:
+          type: string
+          description: "`CLOUD` (hosted service: plans, trial, monthly request quota)\
+            \ or `SELF_HOSTED` (on-prem install: no trial, no monthly quota, every\
+            \ account gets the highest plan's limits unless an admin set per-account\
+            \ overrides)."
+          enum:
+          - CLOUD
+          - SELF_HOSTED
+        subscriptionType:
+          type: string
+          description: Plan tier. In `CLOUD` the limits below derive from it; in `SELF_HOSTED`
+            every account gets `BUSINESS` limits whatever is stored here.
+          enum:
+          - SOLO
+          - TEAM
+          - BUSINESS
+        subscriptionStatus:
+          type: string
+          description: "Billing state of the paid subscription; `NONE` when there\
+            \ is none (trial accounts, self-hosted installs)."
+          enum:
+          - NONE
+          - ACTIVE
+          - PAST_DUE
+          - CANCELED
+        trialEndsAt:
+          type: string
+          description: "When the free trial ends (or ended). Null when the account\
+            \ has no trial clock, and always null in `SELF_HOSTED`."
+          format: date-time
+          nullable: true
+        trialExpired:
+          type: boolean
+          description: "True once `trialEndsAt` has passed and the subscription isn't\
+            \ `ACTIVE`. The API then answers 403 `{\"error\":\"trial_expired\"}` to\
+            \ every call except during a grace period (`graceEndsAt`). Always false\
+            \ in `SELF_HOSTED`."
+        graceEndsAt:
+          type: string
+          description: End of the grace period that follows a canceled subscription;
+            until then the API stays available even though `trialExpired` is true.
+            Null when no grace period is running.
+          format: date-time
+          nullable: true
+        limits:
+          $ref: "#/components/schemas/AccountLimits"
+        usage:
+          $ref: "#/components/schemas/AccountUsage"
+        features:
+          $ref: "#/components/schemas/AccountFeatures"
+      description: "The calling account's plan, the limits the server enforces, current\
+        \ usage against them, and which plan-gated features are available. Read it\
+        \ before creating profiles or starting runs to stay within limits. Unless\
+        \ a field says otherwise, a limit of 0 means \"none allowed\", not \"unlimited\"\
+        ."
   securitySchemes:
     ApiKeyAuth:
       type: apiKey
@@ -1858,7 +2617,7 @@ components:
       in: header
     BearerAuth:
       type: http
-      description: "Same key as `X-Api-Key`, sent in the `Authorization: Bearer tm_â¦\
+      description: "Same key as `X-Api-Key`, sent in the `Authorization: Bearer tm_…\
         ` form."
       scheme: bearer
       bearerFormat: tm_<opaque-key>
