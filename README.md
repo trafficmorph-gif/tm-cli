@@ -130,6 +130,17 @@ your CI script can branch:
 | 3 | WARN — one or more checks crossed the warn threshold |
 | 4 | NO_BASELINE — no baseline run designated for the profile |
 
+Tag the run with the commit so a regression can be traced back to it,
+and pick a dispatch region if the profile's default isn't the one you
+want (`local` forces in-process dispatch):
+
+```bash
+tm runs start 42 --wait --fail-on-verdict FAIL --tag "$GITHUB_SHA" --region eu-west-1
+```
+
+`--tag` can be repeated or comma-separated (up to 20 tags); tags are
+stored lowercase on the run's history row.
+
 ### List profiles
 
 ```

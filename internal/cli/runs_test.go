@@ -4,6 +4,8 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"net/http"
+	"net/http/httptest"
 	"strings"
 	"testing"
 
@@ -596,5 +598,78 @@ func TestErrHistoryRowNotReady_IsSentinel(t *testing.T) {
 	if errors.Is(wrapped, errHistoryRowNotReady) {
 		t.Fatal("a string-equal but unrelated error must NOT match the sentinel — " +
 			"retry-vs-fail-fast classification depends on identity equality")
+	}
+}
+
+func TestStartRun_PlainStartUsesStartEndpoint(t *testing.T) {
+	var gotPath string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotPath = r.URL.Path
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"runId":"r1","status":"RUNNING","profileId":42}`))
+	}))
+	defer srv.Close()
+	c, err := api.NewClientWithResponses(srv.URL)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	status, body, err := startRun(context.Background(), c, 42, "", nil)
+	if err != nil || status != 200 {
+		t.Fatalf("status=%d err=%v", status, err)
+	}
+	if gotPath != "/api/v1/profiles/42/start" {
+		t.Fatalf("path = %q; plain starts must keep using /start for older servers", gotPath)
+	}
+	if !strings.Contains(string(body), `"r1"`) {
+		t.Fatalf("body = %s", body)
+	}
+}
+
+func TestStartRun_RegionAndTagsUseRunsEndpoint(t *testing.T) {
+	var gotPath string
+	var gotBody map[string]any
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotPath = r.URL.Path
+		_ = json.NewDecoder(r.Body).Decode(&gotBody)
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"runId":"r2","status":"RUNNING","profileId":42}`))
+	}))
+	defer srv.Close()
+	c, err := api.NewClientWithResponses(srv.URL)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if _, _, err := startRun(context.Background(), c, 42, "eu-west-1", []string{"abc123", "release-7"}); err != nil {
+		t.Fatal(err)
+	}
+	if gotPath != "/api/v1/profiles/42/runs" {
+		t.Fatalf("path = %q, want /api/v1/profiles/42/runs", gotPath)
+	}
+	if gotBody["region"] != "eu-west-1" {
+		t.Fatalf("region = %v", gotBody["region"])
+	}
+	tags, _ := gotBody["tags"].([]any)
+	if len(tags) != 2 || tags[0] != "abc123" || tags[1] != "release-7" {
+		t.Fatalf("tags = %v", gotBody["tags"])
+	}
+}
+
+func TestStartRun_TagsOnlyOmitsRegion(t *testing.T) {
+	var gotBody map[string]any
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_ = json.NewDecoder(r.Body).Decode(&gotBody)
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{}`))
+	}))
+	defer srv.Close()
+	c, _ := api.NewClientWithResponses(srv.URL)
+
+	if _, _, err := startRun(context.Background(), c, 42, "", []string{"abc123"}); err != nil {
+		t.Fatal(err)
+	}
+	if _, present := gotBody["region"]; present {
+		t.Fatalf("region must be omitted so the server applies the profile default; body = %v", gotBody)
 	}
 }

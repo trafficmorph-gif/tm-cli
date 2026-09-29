@@ -128,6 +128,8 @@ type runsStartFlags struct {
 	pollInterval    time.Duration
 	waitTimeout     time.Duration
 	verdictTimeout  time.Duration
+	region          string
+	tags            []string
 }
 
 var runsStart runsStartFlags
@@ -148,8 +150,9 @@ func newRunsCmd() *cobra.Command {
 //
 // Behavior:
 //
-//   - Without --wait: POSTs /api/v1/profiles/{id}/start and prints
-//     the resulting status. Exits 0 on a 2xx; non-zero on any error.
+//   - Without --wait: POSTs /api/v1/profiles/{id}/start (or /runs when
+//     --region / --tag are set) and prints the resulting status. Exits
+//     0 on a 2xx; non-zero on any error.
 //   - With --wait: polls /api/v1/profiles/{id} every --poll-interval
 //     until the run leaves RUNNING/PAUSED, then fetches the latest
 //     history entry for this profile to surface the auto-verdict.
@@ -175,6 +178,10 @@ func newRunsStartCmd() *cobra.Command {
 		Long: `Starts a traffic run for the given profile id. With --wait, polls until the run
 finishes and surfaces the auto-comparison verdict — the canonical CI gating shape.
 
+--tag stores tags on the run's history row, e.g. --tag "$GITHUB_SHA", so a
+regression can be traced to a commit (filter with the history API's tag).
+--region picks the dispatch region; by default the profile's own region is used.
+
 Exit codes when --fail-on-verdict triggers:
   2  FAIL          one or more checks crossed the failure threshold
   3  WARN          one or more checks crossed the warn threshold
@@ -195,7 +202,35 @@ Exit codes when --fail-on-verdict triggers:
 		"Maximum time to wait for a run to finish (--wait only)")
 	cmd.Flags().DurationVar(&runsStart.verdictTimeout, "verdict-timeout", 60*time.Second,
 		"Maximum time to wait for the history row + auto-verdict to be queryable after the run reaches a terminal status (--wait only). Increase on slow servers; lower to 0 to skip the verdict-presence wait.")
+	cmd.Flags().StringVar(&runsStart.region, "region", "",
+		`Dispatch region for this run (default: the profile's default region; "local" forces in-process dispatch)`)
+	cmd.Flags().StringSliceVar(&runsStart.tags, "tag", nil,
+		"Tag for the run's history row, e.g. a commit SHA; repeat or comma-separate for several (max 20)")
 	return cmd
+}
+
+// startRun POSTs /start, or /runs when a region or tags are given, so a
+// plain start keeps working against servers that predate /runs.
+func startRun(ctx context.Context, c *api.ClientWithResponses, id int64, region string, tags []string) (int, []byte, error) {
+	if region == "" && len(tags) == 0 {
+		resp, err := c.StartWithResponse(ctx, id)
+		if err != nil {
+			return 0, nil, err
+		}
+		return resp.StatusCode(), resp.Body, nil
+	}
+	var body api.StartRunJSONRequestBody
+	if region != "" {
+		body.Region = &region
+	}
+	if len(tags) > 0 {
+		body.Tags = &tags
+	}
+	resp, err := c.StartRunWithResponse(ctx, id, body)
+	if err != nil {
+		return 0, nil, err
+	}
+	return resp.StatusCode(), resp.Body, nil
 }
 
 func runStart(cmd *cobra.Command, args []string) error {
@@ -247,15 +282,15 @@ func runStart(cmd *cobra.Command, args []string) error {
 	// — it sets up state then returns immediately.
 	startCtx, cancel := shortCtx()
 	defer cancel()
-	resp, err := c.StartWithResponse(startCtx, id)
+	status, body, err := startRun(startCtx, c, id, runsStart.region, runsStart.tags)
 	if err != nil {
 		return err
 	}
-	if resp.StatusCode() >= 400 {
-		return errorFromResponse(resp.StatusCode(), resp.Body)
+	if status >= 400 {
+		return errorFromResponse(status, body)
 	}
 	var startResp api.TrafficRunControlResponse
-	if err := json.Unmarshal(resp.Body, &startResp); err != nil {
+	if err := json.Unmarshal(body, &startResp); err != nil {
 		return fmt.Errorf("decode start response: %w", err)
 	}
 
