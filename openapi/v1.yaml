@@ -47,6 +47,8 @@ tags:
     \ that drive each run."
 - name: Runs
   description: "Start, stop, pause, and resume traffic runs for a saved profile."
+- name: Regions
+  description: Dispatch regions a run can originate from.
 - name: History
   description: Read-only access to past runs. Carries per-run latency / throughput
     / error metrics and the auto-comparison verdict against the selected baseline
@@ -94,7 +96,7 @@ paths:
 
         Name uniqueness is NOT enforced server-side: PUT will happily produce a duplicate-named pair under the same user. Subsequent name-keyed operations (POST `/profiles` upsert) would then resolve to the most-recently-created duplicate, which is rarely what the caller wanted. Clients that care about uniqueness (e.g. the MCP server's `tm_update_profile`) should pre-flight a `GET /profiles` and reject renames that would collide.
 
-        The schedule block, if present, replaces any existing schedule for the profile; omitting it leaves the current schedule untouched.
+        The schedule block, if present, replaces any existing schedule for the profile; omitting it leaves the current schedule untouched. Likewise `variablesSetIds`, `region`, `readinessUrl` and `interpolationMode` keep their stored values when omitted; every other field is replaced from the body.
       operationId: updateProfile
       parameters:
       - name: id
@@ -227,6 +229,8 @@ paths:
         Saves a traffic profile keyed by `name`. If a profile with the same name already exists for this user, **it is updated in place rather than rejected** â the underlying service is an upsert. Treat this endpoint as idempotent-by-name. Use `PUT /{id}` instead if you need to update a profile and rename it at the same time.
 
         If the request body includes a `schedule` block, a `ScheduledRun` is created or replaced in the same logical transaction.
+
+        On an upsert, `variablesSetIds`, `region`, `readinessUrl` and `interpolationMode` keep their stored values when omitted (null); every other field is replaced from the body.
       operationId: createProfile
       requestBody:
         content:
@@ -287,7 +291,8 @@ paths:
       description: "Loads the profile by id, builds a run-start request from its configured\
         \ RPS curve / endpoint / scripts, and dispatches it. Tagged `triggeredBy=\"\
         api\"` so it can be distinguished from UI- and schedule-triggered runs in\
-        \ history. Enforces the user's request-usage quota before starting."
+        \ history. Enforces the user's request-usage quota before starting. To set\
+        \ a dispatch region or history tags for the run, use `POST /runs` instead."
       operationId: start
       parameters:
       - name: id
@@ -312,6 +317,50 @@ paths:
           description: "Monthly request-usage quota exhausted. Body carries `code=USAGE_LIMIT_REACHED`,\
             \ plus `usedRequests` / `includedRequests` / `usagePercent` / `upgradeUrl`.\
             \ Distinct from the per-profile concurrent-run cap, which is a 400."
+          content:
+            '*/*':
+              schema:
+                $ref: "#/components/schemas/TrafficRunControlResponse"
+        "200":
+          description: Run started; response carries the run id and current status.
+          content:
+            '*/*':
+              schema:
+                $ref: "#/components/schemas/TrafficRunControlResponse"
+  /api/v1/profiles/{id}/runs:
+    post:
+      tags:
+      - Runs
+      summary: Start a run with per-run options
+      description: "Same as `POST /start`, plus an optional dispatch `region` and\
+        \ history `tags` for this run. Without a body it behaves exactly like `/start`:\
+        \ dispatched locally, no tags. (A separate operation so the existing `start`\
+        \ signature in generated clients stays unchanged.)"
+      operationId: startRun
+      parameters:
+      - name: id
+        in: path
+        description: ID of the saved profile to run.
+        required: true
+        schema:
+          type: integer
+          format: int64
+        example: 42
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ApiRunStartRequest"
+      responses:
+        "409":
+          description: Monthly request-usage quota exhausted; same body as `/start`.
+          content:
+            '*/*':
+              schema:
+                $ref: "#/components/schemas/TrafficRunControlResponse"
+        "400":
+          description: "Same causes as `/start`, plus an unknown or plan-restricted\
+            \ `region` and invalid `tags`. Body: `{\"error\":\"<reason>\"}`."
           content:
             '*/*':
               schema:
@@ -603,7 +652,7 @@ paths:
               schema:
                 $ref: "#/components/schemas/CaptureAnalysisResponse"
         "413":
-          description: Upload exceeds the multipart size limit (default 50 MB).
+          description: Upload exceeds the multipart size limit (default 120 MB).
           content:
             '*/*':
               schema:
@@ -746,13 +795,66 @@ paths:
             '*/*':
               schema:
                 $ref: "#/components/schemas/VariablesSetResponse"
+  /api/v1/regions:
+    get:
+      tags:
+      - Regions
+      summary: List the dispatch regions available to this user
+      description: "Region codes accepted by a profile's `region` and by the `region`\
+        \ field of `POST /api/v1/profiles/{id}/start`. The local (in-process) region\
+        \ is listed whenever it's enabled. Remote regions appear only when the plan\
+        \ allows multi-region dispatch and at least one agent is connected."
+      operationId: listRegions
+      responses:
+        "200":
+          description: "Enabled regions, ordered by region code."
+          content:
+            '*/*':
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/UserRegionResponse"
+  /api/v1/profiles/{id}/status:
+    get:
+      tags:
+      - Runs
+      summary: Get the live status of a profile's run
+      description: "Returns the in-flight run's progress: status, elapsed time, requests\
+        \ sent, response-code counts, current RPS and the last minute of 5-second\
+        \ buckets (RPS, outcome ratios, latency percentiles). Poll this instead of\
+        \ subscribing to the WebSocket. `IDLE` when nothing is running; once a run\
+        \ finishes, its final metrics and verdict are in `/api/v1/history`."
+      operationId: getRunStatus
+      parameters:
+      - name: id
+        in: path
+        description: Profile id.
+        required: true
+        schema:
+          type: integer
+          format: int64
+        example: 42
+      responses:
+        "200":
+          description: Current run state.
+          content:
+            '*/*':
+              schema:
+                $ref: "#/components/schemas/ApiRunStatusResponse"
+        "400":
+          description: "Profile not found or not owned by this user. Body: `{\"error\"\
+            :\"Profile not found\"}`."
+          content:
+            '*/*':
+              schema:
+                $ref: "#/components/schemas/ApiRunStatusResponse"
   /api/v1/history:
     get:
       tags:
       - History
       summary: List past runs with optional filters
       description: "Paginated run history. Filters narrow by profile, trigger source\
-        \ (`api` / `ui` / `scheduled`), region, regression verdict (`PASS` / `WARN`\
+        \ (`api` / `manual` / `scheduled`), region, regression verdict (`PASS` / `WARN`\
         \ / `FAIL` / `NO_BASELINE`), tag, and date range. All filters are AND-combined.\
         \ Use `autoVerdict=FAIL` to fetch the runs a CI gate should care about."
       operationId: listHistory
@@ -782,7 +884,7 @@ paths:
           format: int64
       - name: triggeredBy
         in: query
-        description: "Filter by trigger source: `api`, `ui`, `scheduled`."
+        description: "Filter by trigger source: `api`, `manual` (web UI), `scheduled`."
         required: false
         schema:
           type: string
@@ -867,6 +969,53 @@ paths:
                 type: object
                 additionalProperties:
                   type: object
+  /api/v1/history/compare:
+    get:
+      tags:
+      - History
+      summary: Compare two runs of the same profile
+      description: "The comparison the web UI's compare view shows. `runA` in the\
+        \ response is always the more recent run. Latency p50 / p95 / p99 are compared\
+        \ with a t-test over the runs' time buckets; success, error and per-status-code\
+        \ counts with a bootstrap against the profile's historical run-to-run deltas.\
+        \ `significant` flags a change unlikely to be noise."
+      operationId: compareRuns
+      parameters:
+      - name: runA
+        in: query
+        description: Run-history id of one run.
+        required: true
+        schema:
+          type: integer
+          format: int64
+        example: 1234
+      - name: runB
+        in: query
+        description: Run-history id of the other run.
+        required: true
+        schema:
+          type: integer
+          format: int64
+        example: 1198
+      responses:
+        "400":
+          description: "Same run twice, or runs from different profiles."
+          content:
+            '*/*':
+              schema:
+                $ref: "#/components/schemas/RunComparisonResponse"
+        "404":
+          description: A run doesn't exist or isn't owned by this user.
+          content:
+            '*/*':
+              schema:
+                $ref: "#/components/schemas/RunComparisonResponse"
+        "200":
+          description: Comparison computed.
+          content:
+            '*/*':
+              schema:
+                $ref: "#/components/schemas/RunComparisonResponse"
   /api/v1/domains/{id}:
     delete:
       tags:
@@ -967,6 +1116,39 @@ components:
             maxLength: 320
             minLength: 0
             type: string
+        variablesSetIds:
+          maxItems: 50
+          minItems: 0
+          type: array
+          description: "Attached variables-set ids; their CSV columns fill `$$column$$`\
+            \ macros. Null keeps the current attachments; `[]` detaches all."
+          items:
+            type: integer
+            description: "Attached variables-set ids; their CSV columns fill `$$column$$`\
+              \ macros. Null keeps the current attachments; `[]` detaches all."
+            format: int64
+        region:
+          maxLength: 30
+          minLength: 0
+          type: string
+          description: Default dispatch region code for web-UI and scheduled runs
+            (see `GET /api/v1/regions`). Null keeps the current value; `""` clears
+            it (local).
+        readinessUrl:
+          maxLength: 2048
+          minLength: 0
+          type: string
+          description: URL checked before a scheduled run fires; while it isn't ready
+            the run is postponed (up to 15 minutes) or skipped. Null keeps the current
+            value; `""` clears it.
+        interpolationMode:
+          pattern: (?i)SPLINE|LINEAR
+          type: string
+          description: "How RPS is interpolated between curve points: `SPLINE` (smooth)\
+            \ or `LINEAR`. Null keeps the current mode (`SPLINE` for new profiles)."
+          enum:
+          - SPLINE
+          - LINEAR
         schedule:
           $ref: "#/components/schemas/ScheduleBlock"
       description: "Create or update payload for a traffic profile. The `points` array\
@@ -1064,6 +1246,17 @@ components:
           type: array
           items:
             type: string
+        variablesSetIds:
+          type: array
+          items:
+            type: integer
+            format: int64
+        region:
+          type: string
+        readinessUrl:
+          type: string
+        interpolationMode:
+          type: string
         createdAt:
           type: string
           format: date-time
@@ -1181,6 +1374,31 @@ components:
         profileId:
           type: integer
           format: int64
+    ApiRunStartRequest:
+      type: object
+      properties:
+        region:
+          maxLength: 30
+          minLength: 0
+          type: string
+          description: "Dispatch region code for this run (see `GET /api/v1/regions`).\
+            \ Omitted: dispatched locally, like `/start`; the profile's default `region`\
+            \ is not applied."
+        tags:
+          maxItems: 20
+          minItems: 0
+          type: array
+          description: "Tags stored on the run's history row, e.g. a release or commit\
+            \ id; filter with `GET /api/v1/history?tag=`. Normalized to lowercase\
+            \ `[a-z0-9._-]`. At most 20 tags of 60 characters."
+          items:
+            maxLength: 60
+            minLength: 0
+            type: string
+            description: "Tags stored on the run's history row, e.g. a release or\
+              \ commit id; filter with `GET /api/v1/history?tag=`. Normalized to lowercase\
+              \ `[a-z0-9._-]`. At most 20 tags of 60 characters."
+      description: Optional per-run settings. The whole body may be omitted.
     AddDomainRequest:
       required:
       - domain
@@ -1354,6 +1572,21 @@ components:
           - ROW
           - COLUMN
           - SEQUENTIAL
+    UserRegionResponse:
+      type: object
+      properties:
+        regionCode:
+          type: string
+        displayName:
+          type: string
+        isLocal:
+          type: boolean
+        agentCount:
+          type: integer
+          format: int32
+        connectedCount:
+          type: integer
+          format: int32
     TrafficProfileSummaryResponse:
       type: object
       properties:
@@ -1365,6 +1598,257 @@ components:
         createdAt:
           type: string
           format: date-time
+    ApiRunStatusResponse:
+      type: object
+      properties:
+        profileId:
+          type: integer
+          format: int64
+        runId:
+          type: string
+          description: In-memory run id (matches `runId` on the history row); null
+            when idle.
+        status:
+          type: string
+          enum:
+          - IDLE
+          - RUNNING
+          - PAUSED
+          - COMPLETED
+        region:
+          type: string
+          description: Dispatch region code; null when idle.
+        elapsedSeconds:
+          type: number
+          description: Seconds of the RPS curve played so far (paused time excluded).
+          format: double
+        durationSeconds:
+          type: number
+          format: double
+        requestsSent:
+          type: integer
+          description: Requests dispatched so far.
+          format: int64
+        responseCodeCounts:
+          type: object
+          additionalProperties:
+            type: integer
+            description: HTTP status code â responses so far.
+            format: int64
+          description: HTTP status code â responses so far.
+        currentRps:
+          type: number
+          description: Achieved RPS in the most recent bucket; null before the first
+            bucket.
+          format: double
+        recentBuckets:
+          type: array
+          description: "Most recent 5-second buckets, oldest first (at most 12, i.e.\
+            \ one minute)."
+          items:
+            $ref: "#/components/schemas/RunStatusBucket"
+        scriptOk:
+          type: integer
+          description: Response-script invocations that ran cleanly.
+          format: int64
+        scriptErrors:
+          type: integer
+          description: Response-script invocations that threw.
+          format: int64
+        generatorSaturated:
+          type: boolean
+          description: The load generator can't fire ticks at the configured rate
+            (CPU-bound).
+        downstreamSaturated:
+          type: boolean
+          description: Target p99 latency is approaching the request timeout (the
+            target is the bottleneck).
+        flakyDispatch:
+          type: boolean
+          description: A sustained share of dispatch batches are failing (agent or
+            network).
+        tags:
+          type: array
+          items:
+            type: string
+      description: Live state of the profile's current run. `IDLE` when nothing is
+        running; a finished run reports `COMPLETED` with its final counters until
+        the profile is started or stopped again. Final metrics and the verdict land
+        in `/api/v1/history`.
+    RunStatusBucket:
+      type: object
+      properties:
+        t:
+          type: number
+          description: Elapsed seconds at the middle of the bucket.
+          format: double
+        rps:
+          type: number
+          format: double
+        okRatio:
+          type: number
+          description: Fraction of responses that were 2xx.
+          format: double
+        badRatio:
+          type: number
+          description: Fraction of responses that were 4xx/5xx or connection failures.
+          format: double
+        p50Ms:
+          type: number
+          format: double
+        p95Ms:
+          type: number
+          format: double
+        p99Ms:
+          type: number
+          format: double
+      description: "Most recent 5-second buckets, oldest first (at most 12, i.e. one\
+        \ minute)."
+    BootstrapResult:
+      type: object
+      properties:
+        bins:
+          type: array
+          items:
+            $ref: "#/components/schemas/HistogramBin"
+        currentPercentile:
+          type: number
+          format: double
+        ci95Low:
+          type: number
+          format: double
+        ci95High:
+          type: number
+          format: double
+        significant:
+          type: boolean
+        pValue:
+          type: number
+          format: double
+    BoxStats:
+      type: object
+      properties:
+        min:
+          type: number
+          format: double
+        q1:
+          type: number
+          format: double
+        median:
+          type: number
+          format: double
+        q3:
+          type: number
+          format: double
+        max:
+          type: number
+          format: double
+    CountComparison:
+      type: object
+      properties:
+        valueA:
+          type: number
+          format: double
+        valueB:
+          type: number
+          format: double
+        delta:
+          type: number
+          format: double
+        bootstrap:
+          $ref: "#/components/schemas/BootstrapResult"
+    HistogramBin:
+      type: object
+      properties:
+        min:
+          type: number
+          format: double
+        max:
+          type: number
+          format: double
+        count:
+          type: integer
+          format: int32
+    LatencyComparison:
+      type: object
+      properties:
+        meanA:
+          type: number
+          format: double
+        meanB:
+          type: number
+          format: double
+        delta:
+          type: number
+          format: double
+        deltaPercent:
+          type: number
+          format: double
+        tStat:
+          type: number
+          format: double
+        pValue:
+          type: number
+          format: double
+        degreesOfFreedom:
+          type: integer
+          format: int32
+        significant:
+          type: boolean
+        boxA:
+          $ref: "#/components/schemas/BoxStats"
+        boxB:
+          $ref: "#/components/schemas/BoxStats"
+    RunComparisonResponse:
+      type: object
+      properties:
+        runA:
+          $ref: "#/components/schemas/RunSummary"
+        runB:
+          $ref: "#/components/schemas/RunSummary"
+        latency:
+          type: object
+          additionalProperties:
+            $ref: "#/components/schemas/LatencyComparison"
+        successComparison:
+          $ref: "#/components/schemas/CountComparison"
+        errorComparison:
+          $ref: "#/components/schemas/CountComparison"
+        responseCodeComparisons:
+          type: object
+          additionalProperties:
+            $ref: "#/components/schemas/CountComparison"
+    RunSummary:
+      type: object
+      properties:
+        id:
+          type: integer
+          format: int64
+        profileName:
+          type: string
+        startedAt:
+          type: string
+          format: date-time
+        durationSeconds:
+          type: integer
+          format: int32
+        totalRequests:
+          type: integer
+          format: int64
+        totalErrors:
+          type: integer
+          format: int64
+        avgRps:
+          type: number
+          format: double
+        region:
+          type: string
+        regionDisplayName:
+          type: string
+        tags:
+          type: array
+          items:
+            type: string
   securitySchemes:
     ApiKeyAuth:
       type: apiKey
