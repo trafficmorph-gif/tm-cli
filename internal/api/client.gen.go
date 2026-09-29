@@ -154,7 +154,7 @@ type ApiProfileRequest struct {
 	// ReadinessUrl URL checked before a scheduled run fires; while it isn't ready the run is postponed (up to 15 minutes) or skipped. Null keeps the current value; `""` clears it.
 	ReadinessUrl *string `json:"readinessUrl,omitempty"`
 
-	// Region Default dispatch region code for web-UI and scheduled runs (see `GET /api/v1/regions`). Null keeps the current value; `""` clears it (local).
+	// Region Default dispatch region code for the profile's runs â web UI, scheduled, and API runs that don't pick one (see `GET /api/v1/regions`). Null keeps the current value; `""` clears it (local).
 	Region         *string        `json:"region,omitempty"`
 	RequestBody    *string        `json:"requestBody,omitempty"`
 	RequestHeaders *string        `json:"requestHeaders,omitempty"`
@@ -200,7 +200,7 @@ type ApiProfileResponse struct {
 
 // ApiRunStartRequest Optional per-run settings. The whole body may be omitted.
 type ApiRunStartRequest struct {
-	// Region Dispatch region code for this run (see `GET /api/v1/regions`). Omitted: dispatched locally, like `/start`; the profile's default `region` is not applied.
+	// Region Dispatch region code for this run (see `GET /api/v1/regions`). Omitted or blank: the profile's default `region` (local when unset). Pass `local` to force in-process dispatch.
 	Region *string `json:"region,omitempty"`
 
 	// Tags Tags stored on the run's history row, e.g. a release or commit id; filter with `GET /api/v1/history?tag=`. Normalized to lowercase `[a-z0-9._-]`. At most 20 tags of 60 characters.

@@ -291,8 +291,9 @@ paths:
       description: "Loads the profile by id, builds a run-start request from its configured\
         \ RPS curve / endpoint / scripts, and dispatches it. Tagged `triggeredBy=\"\
         api\"` so it can be distinguished from UI- and schedule-triggered runs in\
-        \ history. Enforces the user's request-usage quota before starting. To set\
-        \ a dispatch region or history tags for the run, use `POST /runs` instead."
+        \ history. Enforces the user's request-usage quota before starting. Dispatched\
+        \ from the profile's default `region` (local when unset), like web-UI and\
+        \ scheduled runs. To pick another region or add history tags, use `POST /runs`."
       operationId: start
       parameters:
       - name: id
@@ -334,8 +335,8 @@ paths:
       summary: Start a run with per-run options
       description: "Same as `POST /start`, plus an optional dispatch `region` and\
         \ history `tags` for this run. Without a body it behaves exactly like `/start`:\
-        \ dispatched locally, no tags. (A separate operation so the existing `start`\
-        \ signature in generated clients stays unchanged.)"
+        \ the profile's default region, no tags. (A separate operation so the existing\
+        \ `start` signature in generated clients stays unchanged.)"
       operationId: startRun
       parameters:
       - name: id
@@ -1131,9 +1132,9 @@ components:
           maxLength: 30
           minLength: 0
           type: string
-          description: Default dispatch region code for web-UI and scheduled runs
-            (see `GET /api/v1/regions`). Null keeps the current value; `""` clears
-            it (local).
+          description: "Default dispatch region code for the profile's runs â web\
+            \ UI, scheduled, and API runs that don't pick one (see `GET /api/v1/regions`).\
+            \ Null keeps the current value; `\"\"` clears it (local)."
         readinessUrl:
           maxLength: 2048
           minLength: 0
@@ -1382,8 +1383,8 @@ components:
           minLength: 0
           type: string
           description: "Dispatch region code for this run (see `GET /api/v1/regions`).\
-            \ Omitted: dispatched locally, like `/start`; the profile's default `region`\
-            \ is not applied."
+            \ Omitted or blank: the profile's default `region` (local when unset).\
+            \ Pass `local` to force in-process dispatch."
         tags:
           maxItems: 20
           minItems: 0
