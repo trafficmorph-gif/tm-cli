@@ -27,6 +27,10 @@ The action's `runs start --wait --fail-on-verdict FAIL,WARN` step
 exits with a verdict-specific code (2 = FAIL, 3 = WARN, 4 =
 NO_BASELINE). The job fails when the verdict matches.
 
+If the profile has thresholds (absolute limits such as `p95 < 200`), the
+same step also exits **99** when any of them fails — no extra flag, and
+no baseline needed. See [Thresholds](../README.md#ci-gating--fail-the-build-on-absolute-limits-thresholds).
+
 ## Inputs
 
 | Input | Required | Default | Notes |

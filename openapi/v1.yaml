@@ -105,7 +105,7 @@ paths:
 
         Name uniqueness is NOT enforced server-side: PUT will happily produce a duplicate-named pair under the same user. Subsequent name-keyed operations (POST `/profiles` upsert) would then resolve to the most-recently-created duplicate, which is rarely what the caller wanted. Clients that care about uniqueness (e.g. the MCP server's `tm_update_profile`) should pre-flight a `GET /profiles` and reject renames that would collide.
 
-        The schedule block, if present, replaces any existing schedule for the profile; omitting it leaves the current schedule untouched. Likewise `variablesSetIds`, `region`, `readinessUrl` and `interpolationMode` keep their stored values when omitted; every other field is replaced from the body.
+        The schedule block, if present, replaces any existing schedule for the profile; omitting it leaves the current schedule untouched. Likewise `variablesSetIds`, `region`, `readinessUrl`, `interpolationMode` and `thresholds` keep their stored values when omitted; every other field is replaced from the body.
       operationId: updateProfile
       parameters:
       - name: id
@@ -159,6 +159,51 @@ paths:
             :\"Profile not found\"}`."
         "204":
           description: Profile deleted.
+  /api/v1/profiles/{id}/thresholds:
+    put:
+      tags:
+      - Profiles
+      summary: Replace a profile's thresholds
+      description: |-
+        Sets the profile's pass/fail thresholds and leaves every other field alone — the way to keep thresholds in a repository and apply them from CI without resending the whole profile. Body: `{"thresholds": [{"metric": "p95", "op": "<", "value": 200}]}`; `[]` removes them. A body without `thresholds` (e.g. a mistyped key) is rejected with 400 rather than read as `[]`. Metrics: `p50`, `p75`, `p95`, `p99` (ms), `errorRate` (percent), `avgRps`, `peakRps`. Operators: `<`, `<=`, `>`, `>=`. Up to 20.
+
+        A run in progress is judged by the thresholds the profile has when it ends. A threshold whose metric has no data (e.g. a latency limit on a run where nothing got a response) fails.
+      operationId: replaceThresholds
+      parameters:
+      - name: id
+        in: path
+        description: Profile id.
+        required: true
+        schema:
+          type: integer
+          format: int64
+        example: 42
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/UpdateThresholdsRequest"
+        required: true
+      responses:
+        "200":
+          description: "The thresholds now stored, normalised (e.g. `P95` → `p95`)."
+          content:
+            '*/*':
+              schema:
+                type: object
+                additionalProperties:
+                  type: object
+        "400":
+          description: "Profile not found or not owned by this user, `thresholds`\
+            \ missing, or a threshold is invalid. Body: `{\"error\": \"Threshold 2:\
+            \ unknown metric 'p90'. Use one of p50, p75, p95, p99, errorRate, avgRps,\
+            \ peakRps.\"}`."
+          content:
+            '*/*':
+              schema:
+                type: object
+                additionalProperties:
+                  type: object
   /api/v1/variables-sets:
     get:
       tags:
@@ -239,7 +284,7 @@ paths:
 
         If the request body includes a `schedule` block, a `ScheduledRun` is created or replaced in the same logical transaction.
 
-        On an upsert, `variablesSetIds`, `region`, `readinessUrl` and `interpolationMode` keep their stored values when omitted (null); every other field is replaced from the body.
+        On an upsert, `variablesSetIds`, `region`, `readinessUrl`, `interpolationMode` and `thresholds` keep their stored values when omitted (null); every other field is replaced from the body.
       operationId: createProfile
       requestBody:
         content:
@@ -452,6 +497,8 @@ paths:
         Saves a `trafficmorph-profile-v1` document, as returned by `GET /profiles/{id}/export`. The body must carry `"_format": "trafficmorph-profile-v1"` plus `name`, `duration`, `endpointUrl` and `points`; the other export fields are optional.
 
         Upsert by name, like `POST /profiles`: if a profile with the same name (trimmed, case-insensitive) exists, **it is overwritten in place**, keeping its `initScript`, `cleanupScript`, `variablesSetIds` and `region` because the document can't carry them. A new name creates a profile with those unset. To copy a profile instead of overwriting it, change `name` in the document first.
+
+        `thresholds` in the document replace the profile's thresholds (`[]` removes them); a document without the key keeps them.
 
         A `schedule` in the document replaces the profile's schedule; without one the existing schedule is kept. A schedule that can't be saved (loop-enabled profile, invalid timezone or mode, slot limit reached) does not fail the import: the profile is still saved and the reason is listed in `warnings`.
       operationId: importProfile
@@ -1005,7 +1052,7 @@ paths:
       description: |-
         Returns the profile as a `trafficmorph-profile-v1` document, the same file the web UI's Export button downloads. Feed it to `POST /profiles/import` to restore it or copy it to another account.
 
-        Fields: `_format`, `name`, `duration`, `loop`, `endpointUrl`, `httpMethod`, `requestPayload`, `requestHeaders`, `points`, `interpolationMode`, `responseScript`, `callbackUrl`, `readinessUrl`, `autoAlertEnabled`, `autoAlertMinSeverity`, `autoAlertCooldownMinutes`, `autoAlertRecipients`, and `schedule` (`mode`, `timezone`, `notifyEmails`, `slots`) only when the profile has one.
+        Fields: `_format`, `name`, `duration`, `loop`, `endpointUrl`, `httpMethod`, `requestPayload`, `requestHeaders`, `points`, `interpolationMode`, `thresholds`, `responseScript`, `callbackUrl`, `readinessUrl`, `autoAlertEnabled`, `autoAlertMinSeverity`, `autoAlertCooldownMinutes`, `autoAlertRecipients`, and `schedule` (`mode`, `timezone`, `notifyEmails`, `slots`) only when the profile has one.
 
         Not included: the profile id, `initScript`, `cleanupScript`, `variablesSetIds`, `region` and the callback secret. Use `GET /profiles/{id}` for the full profile.
       operationId: exportProfile
@@ -1043,7 +1090,9 @@ paths:
       description: "Paginated run history. Filters narrow by profile, trigger source\
         \ (`api` / `manual` / `scheduled`), region, regression verdict (`PASS` / `WARN`\
         \ / `FAIL` / `NO_BASELINE`), tag, and date range. All filters are AND-combined.\
-        \ Use `autoVerdict=FAIL` to fetch the runs a CI gate should care about."
+        \ Use `autoVerdict=FAIL` to fetch the runs a CI gate should care about. Each\
+        \ summary also carries `thresholdStatus` (`PASS` / `FAIL`, null when the profile\
+        \ has no thresholds) and `thresholdResults`."
       operationId: listHistory
       parameters:
       - name: page
@@ -1127,7 +1176,10 @@ paths:
         \ latency quantiles, RPS / latency time series, secondary stats from response\
         \ scripts, the auto-comparison snapshot against baseline, and the verdict\
         \ reasoning. This is the endpoint a CI step polls after `/profiles/{id}/start`\
-        \ to decide pass/fail."
+        \ to decide pass/fail. `thresholdStatus` is `PASS` or `FAIL` against the profile's\
+        \ own thresholds (null when it has none) and, unlike `autoVerdict`, is set\
+        \ as soon as the row exists; `thresholdResults` lists each threshold with\
+        \ the run's `actual` value."
       operationId: getHistoryItem
       parameters:
       - name: id
@@ -1301,21 +1353,6 @@ paths:
           format: int32
           default: 100
       responses:
-        "429":
-          description: "Listed this source too recently. Body: `{\"error\":\"Too many\
-            \ list files requests for this source. Try again in N seconds.\"}`."
-          headers:
-            Retry-After:
-              description: Seconds to wait before retrying.
-              style: simple
-              schema:
-                type: integer
-          content:
-            '*/*':
-              schema:
-                type: array
-                items:
-                  $ref: "#/components/schemas/CaptureSourceFile"
         "200":
           description: "Matching files, newest first; may be empty."
           content:
@@ -1329,6 +1366,21 @@ paths:
             Capture source not found\"}`), or the remote listing failed (`{\"error\"\
             :\"Failed to list files: <reason>\"}`, e.g. authentication failure, unreachable\
             \ host, missing directory or bucket)."
+          content:
+            '*/*':
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/CaptureSourceFile"
+        "429":
+          description: "Listed this source too recently. Body: `{\"error\":\"Too many\
+            \ list files requests for this source. Try again in N seconds.\"}`."
+          headers:
+            Retry-After:
+              description: Seconds to wait before retrying.
+              style: simple
+              schema:
+                type: integer
           content:
             '*/*':
               schema:
@@ -1521,12 +1573,60 @@ components:
           enum:
           - SPLINE
           - LINEAR
+        thresholds:
+          type: array
+          description: "Pass/fail criteria checked when a run ends, e.g. `[{\"metric\"\
+            :\"p95\",\"op\":\"<\",\"value\":200}]`. Up to 20. A run that breaks any\
+            \ of them gets `thresholdStatus: FAIL` in its history, and `tm runs start\
+            \ --wait` exits 99. Null keeps the current thresholds; `[]` removes them."
+          items:
+            $ref: "#/components/schemas/RunThreshold"
         schedule:
           $ref: "#/components/schemas/ScheduleBlock"
       description: "Create or update payload for a traffic profile. The `points` array\
         \ defines the RPS curve (one or more (x,y) coordinates where x is seconds\
         \ since run-start and y is target RPS). The optional `schedule` block atomically\
         \ creates or replaces an automated schedule alongside the profile."
+    RunThreshold:
+      type: object
+      properties:
+        metric:
+          type: string
+          description: "Metric to check. `p50`, `p75`, `p95`, `p99`: latency in ms,\
+            \ as the run page shows it — a sample-weighted mean of 5-second bucket\
+            \ percentiles, so it can read far below the run-wide percentile on a spiky\
+            \ run, and requests that got no response add no sample. `errorRate`: percent\
+            \ (0-100) of requests that got a non-2xx status or no response. `avgRps`,\
+            \ `peakRps`: requests per second sent, counted when dispatched whether\
+            \ or not a response came back — they drop when a plan, profile or account\
+            \ limit throttles the run, not when the target fails, so pair them with\
+            \ `errorRate`."
+          example: p95
+          enum:
+          - p50
+          - p75
+          - p95
+          - p99
+          - errorRate
+          - avgRps
+          - peakRps
+        op:
+          type: string
+          description: Comparison the metric must satisfy.
+          example: <
+          enum:
+          - <
+          - <=
+          - '>'
+          - '>='
+        value:
+          type: number
+          description: "Limit, in the metric's unit (ms, percent or requests/s)."
+          format: double
+          example: 200
+      description: "Pass/fail criterion checked against a run's final metrics. A run\
+        \ whose thresholds don't all hold is marked `thresholdStatus: FAIL`, and `tm\
+        \ runs start --wait` exits 99."
     ScheduleBlock:
       required:
       - mode
@@ -1629,6 +1729,10 @@ components:
           type: string
         interpolationMode:
           type: string
+        thresholds:
+          type: array
+          items:
+            $ref: "#/components/schemas/RunThreshold"
         createdAt:
           type: string
           format: date-time
@@ -1685,6 +1789,18 @@ components:
         "y":
           type: number
           format: double
+    UpdateThresholdsRequest:
+      required:
+      - thresholds
+      type: object
+      properties:
+        thresholds:
+          type: array
+          description: "The profile's complete new set of thresholds; `[]` removes\
+            \ them. Required: a body without it (e.g. a mistyped key) is rejected\
+            \ rather than read as `[]`."
+          items:
+            $ref: "#/components/schemas/RunThreshold"
     CreateVariablesSetRequest:
       required:
       - csvContent

@@ -124,11 +124,77 @@ your CI script can branch:
 
 | Exit code | Meaning |
 |-----------|---------|
-| 0 | Verdict was PASS, or not in `--fail-on-verdict` set |
+| 0 | Passed: thresholds held, and the verdict was PASS or not in `--fail-on-verdict` |
 | 1 | HTTP / network / configuration error |
 | 2 | FAIL — one or more checks crossed the failure threshold |
 | 3 | WARN — one or more checks crossed the warn threshold |
 | 4 | NO_BASELINE — no baseline run designated for the profile |
+| 99 | Thresholds failed — see below |
+
+### CI gating — fail the build on absolute limits (thresholds)
+
+The verdict compares a run with an earlier one. Thresholds are absolute
+limits stored on the profile — "p95 under 200 ms, under 1% errors" —
+and need no baseline:
+
+```bash
+curl --fail-with-body -X PUT "$TM_BASE_URL/api/v1/profiles/42/thresholds" -H "X-Api-Key: $TM_API_KEY" \
+  -H 'Content-Type: application/json' -d '{
+    "thresholds": [
+      {"metric": "p95",       "op": "<",  "value": 200},
+      {"metric": "errorRate", "op": "<=", "value": 1},
+      {"metric": "avgRps",    "op": ">=", "value": 95}
+    ]}'
+```
+
+That replaces only the thresholds (`[]` removes them), so you can keep
+them in your repository and apply them in a step before the run. Keep
+`--fail-with-body` (or `-f`): without it curl exits 0 when the server
+rejects the body with a 400, and the run is then gated on whatever
+thresholds the profile had before, possibly none. A body without a
+`thresholds` key is rejected too, so a mistyped key can't remove them.
+They can also be set in the app, in the **Alerts** tab of the profile
+sidebar. Then:
+
+```bash
+tm runs start 42 --wait
+```
+
+exits **99** if any threshold failed — the same code k6 uses — and lists
+which ones and by how much:
+
+```
+Thresholds:   FAIL
+  FAIL  p95 < 200ms (actual 340.5ms)
+  pass  errorRate <= 1% (actual 0.25%)
+  pass  avgRps >= 95 rps (actual 98.3 rps)
+```
+
+No flag is needed: with `--wait`, a profile's thresholds always gate,
+and they are checked before `--fail-on-verdict`. Use both to fail on an
+absolute limit *or* a regression. `--no-thresholds` reports them without
+failing.
+
+| Metric | Unit | Meaning |
+|---|---|---|
+| `p50` `p75` `p95` `p99` | ms | Response time percentiles, as shown on the run page* |
+| `errorRate` | % (0–100) | Requests with a non-2xx status or no response |
+| `avgRps` `peakRps` | requests/s | Requests sent, counted when dispatched whether or not a response came back. They drop when a plan, profile or account limit throttles the run, not when the target fails, so pair them with `errorRate` |
+
+Operators are `<`, `<=`, `>`, `>=`; up to 20 thresholds per profile. A
+threshold whose metric has no data — a latency limit on a run where
+nothing got a response — **fails** rather than passing on missing data.
+
+\*They are a sample-weighted mean of 5-second bucket percentiles, not
+percentiles pooled across the whole run. On a spiky run they can read
+far from the run-wide figure: a single 5-second stall moves the run-wide
+p95 a lot but barely moves the mean of bucket p95s, while the mean p50
+rises above the run-wide median. Requests that got no response (timeouts,
+refused connections) add no latency sample at all, so a latency limit
+alone won't catch them; that is what `errorRate` is for. On runs longer
+than about 7 hours only the most recent ~7 hours of buckets count
+towards the latency and `peakRps` figures. Thresholds use the same
+numbers the run page shows, so the gate and the UI always agree.
 
 Tag the run with the commit so a regression can be traced back to it,
 and pick a dispatch region if the profile's default isn't the one you

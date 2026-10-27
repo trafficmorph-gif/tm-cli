@@ -4,10 +4,15 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"io"
 	"net/http"
 	"net/http/httptest"
+	"strconv"
 	"strings"
 	"testing"
+	"time"
+
+	"github.com/spf13/cobra"
 
 	"github.com/trafficmorph-gif/tm-cli/internal/api"
 )
@@ -671,5 +676,90 @@ func TestStartRun_TagsOnlyOmitsRegion(t *testing.T) {
 	}
 	if _, present := gotBody["region"]; present {
 		t.Fatalf("region must be omitted so the server applies the profile default; body = %v", gotBody)
+	}
+}
+
+// TestSelectHistoryRow covers the identity race: a concurrent start of the
+// same profile replaces our in-flight run (which then writes no history
+// row), so the newest row can be another run's. The gates must only ever
+// judge the row whose runId /start returned.
+func TestSelectHistoryRow(t *testing.T) {
+	prior := int64(10)
+	row := func(id int64, runID string) map[string]interface{} {
+		r := map[string]interface{}{"id": json.Number(strconv.FormatInt(id, 10)), "autoVerdict": "PASS"}
+		if runID != "" {
+			r["runId"] = runID
+		}
+		return r
+	}
+	cases := []struct {
+		name       string
+		rows       []map[string]interface{}
+		started    string
+		wantID     int64 // 0 = nil row
+		wantOthers []string
+	}{
+		{"ours on top", []map[string]interface{}{row(12, "mine"), row(10, "old")}, "mine", 12, nil},
+		{"ours behind another run's row", []map[string]interface{}{row(13, "theirs"), row(12, "mine"), row(10, "old")}, "mine", 12, []string{"theirs"}},
+		{"only another run's row: not ours", []map[string]interface{}{row(12, "theirs"), row(10, "old")}, "mine", 0, []string{"theirs"}},
+		{"ours not landed yet", []map[string]interface{}{row(10, "old")}, "mine", 0, nil},
+		{"legacy rows without runId fall back to the newest row", []map[string]interface{}{row(12, ""), row(10, "")}, "mine", 12, nil},
+		{"no runId from /start falls back to the newest row", []map[string]interface{}{row(12, "theirs"), row(10, "old")}, "", 12, nil},
+		{"empty page", nil, "mine", 0, nil},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			got, others := selectHistoryRow(c.rows, &prior, c.started)
+			switch {
+			case c.wantID == 0 && got != nil:
+				t.Errorf("got row %v, want none", got["id"])
+			case c.wantID != 0 && (got == nil || *pickID(got) != c.wantID):
+				t.Errorf("got row %v, want id %d", got, c.wantID)
+			}
+			if strings.Join(others, ",") != strings.Join(c.wantOthers, ",") {
+				t.Errorf("got others %v, want %v", others, c.wantOthers)
+			}
+		})
+	}
+}
+
+// TestWaitForHistory_RefusesAnotherRunsRow drives the wait loop against a
+// server whose only new row belongs to a different run: it must fail
+// (exit 1) naming both runs, not return that row to the gates.
+func TestWaitForHistory_RefusesAnotherRunsRow(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"content": [
+		  {"id": 12, "runId": "theirs", "autoVerdict": "PASS", "thresholdStatus": "PASS"},
+		  {"id": 10, "runId": "old", "autoVerdict": "FAIL"}
+		]}`))
+	}))
+	defer srv.Close()
+	c, err := api.NewClientWithResponses(srv.URL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	savedVerdictTimeout, savedTimeout := runsStart.verdictTimeout, config.Timeout
+	runsStart.verdictTimeout, config.Timeout = time.Millisecond, 10*time.Second
+	defer func() { runsStart.verdictTimeout, config.Timeout = savedVerdictTimeout, savedTimeout }()
+
+	cmd := &cobra.Command{}
+	cmd.SetContext(context.Background())
+	cmd.SetErr(io.Discard)
+	prior := int64(10)
+
+	row, err := waitForHistoryWithVerdict(cmd, c, 42, &prior, "mine")
+	if err == nil {
+		t.Fatalf("expected an error, got row %v", row)
+	}
+	for _, want := range []string{"mine", "theirs"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("error %q does not mention %q", err, want)
+		}
+	}
+
+	row, err = waitForHistoryWithVerdict(cmd, c, 42, &prior, "theirs")
+	if err != nil || pickRunID(row) != "theirs" {
+		t.Fatalf("matching runId: got row %v, err %v", row, err)
 	}
 }

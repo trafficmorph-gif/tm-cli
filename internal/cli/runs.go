@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"strconv"
 	"strings"
 	"time"
 
@@ -53,11 +54,11 @@ const (
 //
 // Decision matrix:
 //
-//   row=nil                                        → outcomeWaitRow
-//   priorTopID set + can't pick rowID              → outcomeWaitRow  (fail-closed)
-//   priorTopID set + rowID equals priorTopID       → outcomeWaitRow
-//   priorTopID nil OR rowID differs, no verdict    → outcomeWaitVerdict
-//   priorTopID nil OR rowID differs, verdict set   → outcomeDone
+//	row=nil                                        → outcomeWaitRow
+//	priorTopID set + can't pick rowID              → outcomeWaitRow  (fail-closed)
+//	priorTopID set + rowID equals priorTopID       → outcomeWaitRow
+//	priorTopID nil OR rowID differs, no verdict    → outcomeWaitVerdict
+//	priorTopID nil OR rowID differs, verdict set   → outcomeDone
 //
 // Fail-closed contract on the "can't pick rowID" branch:
 // classifyHistoryAttempt MUST NOT treat a row whose id we can't
@@ -123,13 +124,14 @@ func pickID(row map[string]interface{}) *int64 {
 // Lives at file scope so cobra's Run/RunE handlers can read it
 // without per-invocation re-parsing.
 type runsStartFlags struct {
-	wait            bool
-	failOnVerdict   string
-	pollInterval    time.Duration
-	waitTimeout     time.Duration
-	verdictTimeout  time.Duration
-	region          string
-	tags            []string
+	wait           bool
+	failOnVerdict  string
+	pollInterval   time.Duration
+	waitTimeout    time.Duration
+	verdictTimeout time.Duration
+	region         string
+	tags           []string
+	noThresholds   bool
 }
 
 var runsStart runsStartFlags
@@ -171,6 +173,12 @@ func newRunsCmd() *cobra.Command {
 // Distinct codes per verdict so a CI script can branch — e.g. fail
 // the build on FAIL but warn-only on WARN. Both share the catch-all
 // `if $? -ne 0` shape for users who don't care.
+//
+// Thresholds are separate: absolute pass/fail limits stored on the
+// profile (p95 < 200, errorRate <= 1, ...). With --wait, a run that
+// breaks any of them exits 99 — the code k6 uses — whether or not
+// --fail-on-verdict is set, and before the verdict gate is consulted.
+// --no-thresholds reports them without failing.
 func newRunsStartCmd() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "start <profile-id>",
@@ -182,12 +190,17 @@ finishes and surfaces the auto-comparison verdict — the canonical CI gating sh
 regression can be traced to a commit (filter with the history API's tag).
 --region picks the dispatch region; by default the profile's own region is used.
 
-Exit codes when --fail-on-verdict triggers:
-  2  FAIL          one or more checks crossed the failure threshold
-  3  WARN          one or more checks crossed the warn threshold
-  4  NO_BASELINE   no baseline run designated for the profile
-  1  any other failure (HTTP error, timeout, ...)
-  0  success or verdict not in --fail-on-verdict set`,
+With --wait, a run that breaks any of the profile's thresholds (e.g. p95 < 200)
+exits 99. This happens without --fail-on-verdict and is checked first; pass
+--no-thresholds to report them without failing.
+
+Exit codes:
+  99  thresholds failed (--wait; see above)
+  2   FAIL          --fail-on-verdict: a check crossed the failure threshold
+  3   WARN          --fail-on-verdict: a check crossed the warn threshold
+  4   NO_BASELINE   --fail-on-verdict: no baseline run designated for the profile
+  1   any other failure (HTTP error, timeout, ...)
+  0   success`,
 		Args:        cobra.ExactArgs(1),
 		Annotations: authRequired(),
 		RunE:        runStart,
@@ -206,6 +219,8 @@ Exit codes when --fail-on-verdict triggers:
 		`Dispatch region for this run (default: the profile's default region; "local" forces in-process dispatch)`)
 	cmd.Flags().StringSliceVar(&runsStart.tags, "tag", nil,
 		"Tag for the run's history row, e.g. a commit SHA; repeat or comma-separate for several (max 20)")
+	cmd.Flags().BoolVar(&runsStart.noThresholds, "no-thresholds", false,
+		"Report the profile's thresholds but don't exit 99 when they fail (--wait only)")
 	return cmd
 }
 
@@ -312,7 +327,7 @@ func runStart(cmd *cobra.Command, args []string) error {
 		return err
 	}
 
-	// Phase 3: fetch the new history row's verdict. THREE race
+	// Phase 3: fetch the new history row's verdict. FOUR race
 	// windows the wait closes:
 	//   1. Terminal-status flip beats RunHistory row insert (row
 	//      hasn't appeared yet);
@@ -323,7 +338,17 @@ func runStart(cmd *cobra.Command, args []string) error {
 	//      the anchor, a previous-run row with an already-populated
 	//      verdict would be returned and the gate would fire on
 	//      stale data — exact false-pass / false-fail bug.
-	history, err := waitForHistoryWithVerdict(cmd, c, id, priorTopID)
+	//   4. The newest row belongs to ANOTHER run of this profile: a
+	//      schedule slot, a second pipeline or a UI click started it
+	//      while ours was in flight, and the server replaces (cancels)
+	//      the in-flight run, which then writes no row at all. The row
+	//      is matched on the runId /start returned, so the gates never
+	//      judge someone else's run as ours.
+	startedRunID := ""
+	if startResp.RunId != nil {
+		startedRunID = *startResp.RunId
+	}
+	history, err := waitForHistoryWithVerdict(cmd, c, id, priorTopID, startedRunID)
 	if err != nil {
 		return fmt.Errorf("fetch run history: %w", err)
 	}
@@ -336,7 +361,98 @@ func runStart(cmd *cobra.Command, args []string) error {
 		printHistorySummary(cmd, history)
 	}
 
+	// Thresholds before the verdict: they are the profile's own absolute
+	// limits, so a run that breaks them fails the build regardless of how it
+	// compares with the baseline.
+	if !runsStart.noThresholds {
+		if err := resolveThresholdExit(history); err != nil {
+			return err
+		}
+	}
 	return resolveGateExit(history, runsStart.failOnVerdict)
+}
+
+// exitCodeThresholdsFailed is the exit code for a run that broke any of its
+// profile's thresholds — the same code k6 uses, so pipelines ported from k6
+// keep their handling.
+const exitCodeThresholdsFailed = 99
+
+// resolveThresholdExit fails the build when the run broke a threshold. The
+// server writes thresholdStatus in the same save as the history row, so,
+// unlike the auto-verdict, there is no pending state to fail closed on:
+// once the row exists, an absent status means the profile has no thresholds.
+func resolveThresholdExit(history map[string]interface{}) error {
+	status, _ := history["thresholdStatus"].(string)
+	if !strings.EqualFold(status, "FAIL") {
+		return nil
+	}
+	var failed []string
+	for _, r := range thresholdResults(history) {
+		if passed, _ := r["passed"].(bool); !passed {
+			failed = append(failed, describeThreshold(r))
+		}
+	}
+	msg := "thresholds failed"
+	if len(failed) > 0 {
+		msg += ": " + strings.Join(failed, "; ")
+	}
+	return &exitCodeError{code: exitCodeThresholdsFailed, msg: msg}
+}
+
+// thresholdResults extracts the per-threshold results from a history row,
+// skipping anything that isn't an object.
+func thresholdResults(history map[string]interface{}) []map[string]interface{} {
+	raw, _ := history["thresholdResults"].([]interface{})
+	out := make([]map[string]interface{}, 0, len(raw))
+	for _, item := range raw {
+		if m, ok := item.(map[string]interface{}); ok {
+			out = append(out, m)
+		}
+	}
+	return out
+}
+
+// describeThreshold renders one result as e.g. "p95 < 200ms (actual 340.5ms)".
+func describeThreshold(r map[string]interface{}) string {
+	metric, _ := r["metric"].(string)
+	op, _ := r["op"].(string)
+	unit := thresholdUnit(metric)
+	actual := "no data"
+	if a, ok := r["actual"]; ok && a != nil {
+		actual = "actual " + formatThresholdNumber(a) + unit
+	}
+	return fmt.Sprintf("%s %s %s%s (%s)", metric, op, formatThresholdNumber(r["value"]), unit, actual)
+}
+
+// formatThresholdNumber prints a history number in plain decimal. The server
+// serialises doubles the way Java's Double.toString does — 200.0, 3.0E-4 —
+// and printing those verbatim (they arrive as json.Number) would put
+// "200.0ms" and "3.0E-4%" in CI logs.
+func formatThresholdNumber(v interface{}) string {
+	switch n := v.(type) {
+	case json.Number:
+		if f, err := n.Float64(); err == nil {
+			return strconv.FormatFloat(f, 'f', -1, 64)
+		}
+		return n.String()
+	case float64:
+		return strconv.FormatFloat(n, 'f', -1, 64)
+	default:
+		return fmt.Sprintf("%v", v)
+	}
+}
+
+func thresholdUnit(metric string) string {
+	switch metric {
+	case "p50", "p75", "p95", "p99":
+		return "ms"
+	case "errorRate":
+		return "%"
+	case "avgRps", "peakRps":
+		return " rps"
+	default:
+		return ""
+	}
 }
 
 // resolveGateExit translates a history row + --fail-on-verdict spec
@@ -424,20 +540,21 @@ func waitForRunFinish(cmd *cobra.Command, c *api.ClientWithResponses, profileID 
 	}
 }
 
-// waitForHistoryWithVerdict polls /history?profileId=<id>&size=1
+// waitForHistoryWithVerdict polls the profile's newest history rows
 // with bounded exponential backoff until either:
 //
-//   - a history row exists with an id distinct from priorTopID
-//     (i.e. it's the row from the run we just started, not a
-//     leftover from an earlier run) AND has a non-empty
-//     autoVerdict, OR
+//   - the row for the run we just started exists — matched on
+//     startedRunID, or for servers that don't record run ids, an
+//     id distinct from priorTopID (i.e. not a leftover from an
+//     earlier run) — AND has a non-empty autoVerdict, OR
 //   - the --verdict-timeout budget is exhausted, in which case the
 //     most-recent NEW row (verdict-less) is returned with a
 //     warning, OR a clear "no new row appeared" error when even
 //     row insert never happened.
 //
-// Three race windows this closes, all happening AFTER the run
-// reaches a terminal in-memory status:
+// Four race windows this closes, all happening AFTER the run
+// reaches a terminal in-memory status (the fourth, another run of
+// the same profile landing first, is selectHistoryRow's job):
 //
 //  1. RunHistory row insert lags terminal-status by a few hundred
 //     ms (the writer is on a different transactional boundary
@@ -454,19 +571,24 @@ func waitForRunFinish(cmd *cobra.Command, c *api.ClientWithResponses, profileID 
 // Backoff starts at 500ms and doubles up to 5s per attempt.
 // Setting --verdict-timeout=0 disables the wait and behaves like
 // a single fetch (useful in tests).
-func waitForHistoryWithVerdict(cmd *cobra.Command, c *api.ClientWithResponses, profileID int64, priorTopID *int64) (map[string]interface{}, error) {
+func waitForHistoryWithVerdict(cmd *cobra.Command, c *api.ClientWithResponses, profileID int64, priorTopID *int64, startedRunID string) (map[string]interface{}, error) {
 	var (
 		deadline    = time.Now().Add(runsStart.verdictTimeout)
 		backoff     = 500 * time.Millisecond
 		maxBackoff  = 5 * time.Second
 		lastNewRow  map[string]interface{} // most-recent row WHOSE ID DIFFERS from priorTopID
+		otherRunIDs []string               // newer rows seen that belong to other runs of the profile
 		attempts    int
 	)
 	for {
 		attempts++
-		row, err := fetchLatestHistoryForProfile(c, profileID)
+		rows, err := fetchHistoryPage(c, profileID, historyScanSize)
 		switch {
 		case err == nil:
+			row, others := selectHistoryRow(rows, priorTopID, startedRunID)
+			if len(others) > 0 {
+				otherRunIDs = others
+			}
 			// Defer the row-vs-priorTopID + verdict-presence
 			// decision to the pure classifier so the loop body
 			// reads as a state machine and unit-tests can
@@ -511,6 +633,10 @@ func waitForHistoryWithVerdict(cmd *cobra.Command, c *api.ClientWithResponses, p
 					runsStart.verdictTimeout, attempts)
 				return lastNewRow, nil
 			}
+			if len(otherRunIDs) > 0 {
+				return nil, fmt.Errorf("no history row for the run this command started (runId %s) appeared within %s (%d attempts); the newer rows for profile id %d are from other runs (%s). Starting a profile again replaces a run in flight, so ours was probably cancelled by a concurrent start. Refusing to gate on another run's result",
+					startedRunID, runsStart.verdictTimeout, attempts, profileID, strings.Join(otherRunIDs, ", "))
+			}
 			return nil, fmt.Errorf("no NEW history row appeared within %s (%d attempts) for profile id %d — the run we just started may not have been persisted yet",
 				runsStart.verdictTimeout, attempts, profileID)
 		}
@@ -551,16 +677,74 @@ func fetchTopHistoryID(c *api.ClientWithResponses, profileID int64) (*int64, err
 	return id, nil
 }
 
-// fetchLatestHistoryForProfile hits /history?profileId=<id>&size=1
-// and unmarshals the single most-recent run summary. Returns a
-// distinct error type when the row simply doesn't exist yet so the
-// retry loop above can distinguish "wait longer" from "real
-// error".
+// historyScanSize is how many of the profile's newest history rows the
+// post-run wait inspects for the row whose runId matches the run this
+// command started. Rows come newest-first, so ours is near the top
+// unless other runs of the profile finished after it.
+const historyScanSize = 20
+
+// pickRunID returns a history row's runId, or "" when the row has none
+// (rows written before the server recorded run ids).
+func pickRunID(row map[string]interface{}) string {
+	runID, _ := row["runId"].(string)
+	return runID
+}
+
+// selectHistoryRow picks, from a newest-first page of the profile's
+// history, the row to judge the run this command started by, plus the
+// runIds of newer rows that belong to other runs.
+//
+// With a startedRunID it returns the row whose runId matches, wherever it
+// sits on the page. When none matches but the rows carry runIds, it returns
+// nil: those rows are other runs of the same profile (starting a profile
+// again replaces the run in flight, and the replaced run writes no row),
+// and gating on one of them would report someone else's result as ours.
+// Only rows without runIds (servers that predate them) fall back to the
+// newest row, which classifyHistoryAttempt then checks against priorTopID.
+func selectHistoryRow(rows []map[string]interface{}, priorTopID *int64, startedRunID string) (map[string]interface{}, []string) {
+	if len(rows) == 0 {
+		return nil, nil
+	}
+	if startedRunID == "" {
+		return rows[0], nil
+	}
+	var others []string
+	for _, row := range rows {
+		if id := pickID(row); priorTopID != nil && id != nil && *id == *priorTopID {
+			break // the pre-start snapshot: every row from here on is older
+		}
+		runID := pickRunID(row)
+		if runID == startedRunID {
+			return row, others
+		}
+		if runID != "" {
+			others = append(others, runID)
+		}
+	}
+	if pickRunID(rows[0]) != "" {
+		return nil, others
+	}
+	return rows[0], others
+}
+
+// fetchLatestHistoryForProfile returns the profile's most recent run
+// summary, or errHistoryRowNotReady when it has none yet, so the retry
+// loop above can distinguish "wait longer" from "real error".
 func fetchLatestHistoryForProfile(c *api.ClientWithResponses, profileID int64) (map[string]interface{}, error) {
+	rows, err := fetchHistoryPage(c, profileID, 1)
+	if err != nil {
+		return nil, err
+	}
+	return rows[0], nil
+}
+
+// fetchHistoryPage hits /history?profileId=<id>&size=<size> and
+// unmarshals the newest run summaries, newest first. Returns
+// errHistoryRowNotReady when the profile has no rows at all.
+func fetchHistoryPage(c *api.ClientWithResponses, profileID int64, size int32) ([]map[string]interface{}, error) {
 	ctx, cancel := shortCtx()
 	defer cancel()
 
-	size := int32(1)
 	page := int32(0)
 	params := &api.ListHistoryParams{
 		ProfileId: &profileID,
@@ -600,7 +784,7 @@ func fetchLatestHistoryForProfile(c *api.ClientWithResponses, profileID int64) (
 	if len(page0.Content) == 0 {
 		return nil, errHistoryRowNotReady
 	}
-	return page0.Content[0], nil
+	return page0.Content, nil
 }
 
 // pickVerdict pulls the autoVerdict string from a history summary,
@@ -749,6 +933,16 @@ func printHistorySummary(cmd *cobra.Command, h map[string]interface{}) {
 	if reasons, ok := h["autoVerdictReasons"].(string); ok && reasons != "" {
 		fmt.Fprintf(out, "Reasons:      %s\n", reasons)
 	}
+	if status, ok := h["thresholdStatus"].(string); ok && status != "" {
+		fmt.Fprintf(out, "Thresholds:   %s\n", status)
+		for _, r := range thresholdResults(h) {
+			mark := "FAIL"
+			if passed, _ := r["passed"].(bool); passed {
+				mark = "pass"
+			}
+			fmt.Fprintf(out, "  %s  %s\n", mark, describeThreshold(r))
+		}
+	}
 }
 
 func newRunsStopCmd() *cobra.Command {
@@ -859,4 +1053,3 @@ func runControlCmd(verb, short string, call func(context.Context, *api.ClientWit
 		},
 	}
 }
-
